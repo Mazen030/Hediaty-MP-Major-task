@@ -4,7 +4,7 @@ import 'create_event_list_screen.dart';
 import 'event_listpage.dart';
 import 'profile.dart';
 
-
+//the final ui
 class FriendsListScreen extends StatefulWidget {
   @override
   _FriendsListScreenState createState() => _FriendsListScreenState();
