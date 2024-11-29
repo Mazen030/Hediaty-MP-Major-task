@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'gift_list_screen.dart'; // For navigating to the Gift List page
 import 'add_event_screen.dart'; // For adding and editing events
+import 'database_helper.dart'; // Import DatabaseHelper
 
 class EventListScreen extends StatefulWidget {
   final bool isUserEvents; // Flag to check if events belong to the user
@@ -12,22 +13,35 @@ class EventListScreen extends StatefulWidget {
 }
 
 class _EventListScreenState extends State<EventListScreen> {
-  List<Map<String, dynamic>> _events = [
-    {
-      'name': 'John\'s Birthday',
-      'category': 'Birthday',
-      'date': DateTime(2024, 12, 1),
-      'status': 'Upcoming',
-    },
-    {
-      'name': 'Sarah & Tom\'s Wedding',
-      'category': 'Wedding',
-      'date': DateTime(2024, 10, 30),
-      'status': 'Past',
-    },
-  ];
-
+  final DatabaseHelper _databaseHelper = DatabaseHelper(); // Instance of DatabaseHelper
+  List<Map<String, dynamic>> _events = [];
+  bool _isLoading = true;
   String _sortBy = 'Name';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEvents(); // Load events from database on initialization
+  }
+
+  Future<void> _loadEvents() async {
+    setState(() => _isLoading = true);
+
+    try {
+      final events = widget.isUserEvents
+          ? await _databaseHelper.getUserEvents() // Load user's events
+          : await _databaseHelper.getFriendsEvents(); // Load friend's events
+
+      setState(() {
+        _events = events;
+        _sortEvents(); // Sort events based on selected sorting
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Error loading events: $e');
+      setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,62 +68,57 @@ class _EventListScreenState extends State<EventListScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              itemCount: _events.length,
-              itemBuilder: (context, index) {
-                final event = _events[index];
-                return Card(
-                  elevation: 5,
-                  margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: ListTile(
-                    leading: Icon(
-                      Icons.event,
-                      color: _getStatusColor(event['status']),
-                      size: 32,
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator())
+          : _events.isEmpty
+          ? Center(child: Text('No events available'))
+          : ListView.builder(
+        itemCount: _events.length,
+        itemBuilder: (context, index) {
+          final event = _events[index];
+          return Card(
+            elevation: 5,
+            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: ListTile(
+              leading: Icon(
+                Icons.event,
+                color: _getStatusColor(event['status']),
+                size: 32,
+              ),
+              title: Text(
+                event['name'],
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                '${event['category']} - ${event['status']} - ${event['date'].split(' ')[0]}',
+                style: TextStyle(color: Colors.grey[700]),
+              ),
+              trailing: widget.isUserEvents
+                  ? PopupMenuButton<String>(
+                onSelected: (value) => _handleEventAction(value, index),
+                itemBuilder: (context) => [
+                  PopupMenuItem(value: 'edit', child: Text('Edit')),
+                  PopupMenuItem(value: 'delete', child: Text('Delete')),
+                ],
+              )
+                  : null, // No actions for friend's events
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => GiftListScreen(
+                      friendName: event['name'],
+                      isFriendGiftList: !widget.isUserEvents,
                     ),
-                    title: Text(
-                      event['name'],
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    subtitle: Text(
-                      '${event['category']} - ${event['status']} - ${event['date'].toLocal().toString().split(' ')[0]}',
-                      style: TextStyle(color: Colors.grey[700]),
-                    ),
-                    trailing: widget.isUserEvents
-                        ? PopupMenuButton<String>(
-                      onSelected: (value) => _handleEventAction(value, index),
-                      itemBuilder: (context) => [
-                        PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        PopupMenuItem(value: 'delete', child: Text('Delete')),
-                      ],
-                    )
-                        : null, // Hide actions for friend's events
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => GiftListScreen(
-                            friendName: event['name'],
-                            isFriendGiftList: !widget.isUserEvents,
-                          ),
-                        ),
-                      );
-                    },
                   ),
                 );
               },
             ),
-          ),
-        ],
+          );
+        },
       ),
       floatingActionButton: widget.isUserEvents
           ? FloatingActionButton.extended(
@@ -118,21 +127,8 @@ class _EventListScreenState extends State<EventListScreen> {
         icon: Icon(Icons.add),
         label: Text('Add Event'),
       )
-          : null, // Hide Add button for friend's events
+          : null, // Hide add button for friend's events
     );
-  }
-
-  Color _getStatusColor(String status) {
-    switch (status) {
-      case 'Upcoming':
-        return Colors.green;
-      case 'Current':
-        return Colors.blue;
-      case 'Past':
-        return Colors.grey;
-      default:
-        return Colors.black;
-    }
   }
 
   void _addEvent() async {
@@ -140,36 +136,28 @@ class _EventListScreenState extends State<EventListScreen> {
       context,
       MaterialPageRoute(builder: (context) => AddEventScreen()),
     );
+
     if (newEvent != null) {
-      setState(() {
-        _events.add(newEvent);
-        _sortEvents(); // Sort after adding
-      });
+      await _databaseHelper.insertEvent(newEvent); // Insert new event into database
+      _loadEvents(); // Reload events
     }
   }
 
   void _editEvent(int index) async {
     final updatedEvent = await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => AddEventScreen(event: _events[index]),
-      ),
+      MaterialPageRoute(builder: (context) => AddEventScreen(event: _events[index])),
     );
+
     if (updatedEvent != null) {
-      setState(() {
-        _events[index] = updatedEvent;
-        _sortEvents(); // Sort after editing
-      });
+      await _databaseHelper.updateEvent(updatedEvent); // Update event in database
+      _loadEvents(); // Reload events
     }
   }
 
-  void _deleteEvent(int index) {
-    setState(() {
-      _events.removeAt(index);
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Event deleted!')),
-    );
+  void _deleteEvent(int index) async {
+    await _databaseHelper.deleteEvent(_events[index]['id']); // Delete event from database
+    _loadEvents(); // Reload events
   }
 
   void _handleEventAction(String action, int index) {
@@ -187,6 +175,19 @@ class _EventListScreenState extends State<EventListScreen> {
       _events.sort((a, b) => a['category'].compareTo(b['category']));
     } else if (_sortBy == 'Status') {
       _events.sort((a, b) => a['status'].compareTo(b['status']));
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'Upcoming':
+        return Colors.green;
+      case 'Current':
+        return Colors.blue;
+      case 'Past':
+        return Colors.grey;
+      default:
+        return Colors.black;
     }
   }
 }

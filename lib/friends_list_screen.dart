@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
+import 'database_helper.dart'; // Import DatabaseHelper
 import 'gift_list_screen.dart';
 import 'create_event_list_screen.dart';
 import 'event_listpage.dart';
 import 'profile.dart';
 
-//the final ui
 class FriendsListScreen extends StatefulWidget {
   @override
   _FriendsListScreenState createState() => _FriendsListScreenState();
 }
 
 class _FriendsListScreenState extends State<FriendsListScreen> {
+  final DatabaseHelper _databaseHelper = DatabaseHelper(); // DatabaseHelper instance
   List<Map<String, dynamic>> _friends = [];
   bool _isLoading = true;
 
@@ -21,15 +22,72 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
   }
 
   Future<void> _loadFriends() async {
-    await Future.delayed(Duration(seconds: 2)); // Simulate network delay
     setState(() {
-      _friends = [
-        {'name': 'John Doe', 'profilePicture': '', 'upcomingEvents': 2},
-        {'name': 'Jane Smith', 'profilePicture': '', 'upcomingEvents': 0},
-      ];
-      _isLoading = false;
+      _isLoading = true;
     });
+
+    try {
+      // Fetch friends from the database
+      final friends = await _databaseHelper.getFriendsList();
+
+      setState(() {
+        _friends = friends;
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Error loading friends: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
+
+  Future<void> _addFriend() async {
+    final emailController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('Add Friend'),
+          content: TextField(
+            controller: emailController,
+            decoration: InputDecoration(labelText: 'Friend Email'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                String email = emailController.text.trim();
+                if (email.isNotEmpty) {
+                  try {
+                    // Use addFriend method to add a friend by email
+                    await _databaseHelper.addFriend(email);
+                    await _loadFriends(); // Refresh list
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Friend added successfully!')),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: ${e.toString()}')),
+                    );
+                  }
+                  Navigator.pop(context);
+                }
+              },
+              child: Text('Add'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -73,88 +131,47 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
           ? Center(child: CircularProgressIndicator())
           : _friends.isEmpty
           ? _buildEmptyState()
-          : Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: ElevatedButton.icon(
-              onPressed: () {
+          : ListView.builder(
+        itemCount: _friends.length,
+        padding: const EdgeInsets.all(16.0),
+        itemBuilder: (context, index) {
+          final friend = _friends[index];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            elevation: 4,
+            child: ListTile(
+              contentPadding: EdgeInsets.all(16),
+              leading: CircleAvatar(
+                radius: 28,
+                child: Icon(Icons.person, size: 28),
+              ),
+              title: Text(
+                friend['name'],
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              subtitle: Text(
+                friend['upcomingEvents'] > 0
+                    ? 'Upcoming Events: ${friend['upcomingEvents']}'
+                    : 'No Upcoming Events',
+                style: TextStyle(color: Colors.grey[600]),
+              ),
+              onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => CreateEventListScreen()),
-                );
-              },
-              icon: Icon(Icons.event, color: Colors.white),
-              label: Text(
-                'Create Your Own Event/List',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF6A1B9A),
-                padding: EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: _friends.length,
-              padding: const EdgeInsets.all(16.0),
-              itemBuilder: (context, index) {
-                final friend = _friends[index];
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  elevation: 4,
-                  child: ListTile(
-                    contentPadding: EdgeInsets.all(16),
-                    leading: CircleAvatar(
-                      radius: 28,
-                      backgroundImage: friend['profilePicture'] != ''
-                          ? AssetImage(friend['profilePicture'])
-                          : null,
-                      child: friend['profilePicture'] == '' ? Icon(Icons.person, size: 28) : null,
+                  MaterialPageRoute(
+                    builder: (context) => GiftListScreen(
+                      friendName: friend['name'],
+                      isFriendGiftList: true,
                     ),
-                    title: Text(
-                      friend['name'],
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-                    ),
-                    subtitle: Text(
-                      friend['upcomingEvents'] > 0
-                          ? 'Upcoming Events: ${friend['upcomingEvents']}'
-                          : 'No Upcoming Events',
-                      style: TextStyle(color: Colors.grey[600]),
-                    ),
-                    trailing: friend['upcomingEvents'] > 0
-                        ? CircleAvatar(
-                      backgroundColor: Colors.red,
-                      child: Text(
-                        '${friend['upcomingEvents']}',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    )
-                        : null,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => GiftListScreen(
-                            friendName: friend['name'],
-                            isFriendGiftList: true,
-                          ),
-                        ),
-                      );
-                    },
                   ),
                 );
               },
             ),
-          ),
-        ],
+          );
+        },
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addFriend,
@@ -184,12 +201,6 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
       ),
     );
   }
-
-  void _addFriend() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Add Friend functionality coming soon!')),
-    );
-  }
 }
 
 class FriendSearchDelegate extends SearchDelegate {
@@ -213,8 +224,7 @@ class FriendSearchDelegate extends SearchDelegate {
   @override
   Widget buildResults(BuildContext context) {
     final results = friends
-        .where((friend) =>
-        friend['name'].toLowerCase().contains(query.toLowerCase()))
+        .where((friend) => friend['name'].toLowerCase().contains(query.toLowerCase()))
         .toList();
 
     return ListView.builder(
@@ -222,24 +232,10 @@ class FriendSearchDelegate extends SearchDelegate {
       itemBuilder: (context, index) {
         final friend = results[index];
         return ListTile(
-          leading: CircleAvatar(
-            backgroundImage: friend['profilePicture'] != ''
-                ? AssetImage(friend['profilePicture'])
-                : null,
-            child: friend['profilePicture'] == '' ? Icon(Icons.person) : null,
-          ),
           title: Text(friend['name']),
           subtitle: Text(friend['upcomingEvents'] > 0
               ? 'Upcoming Events: ${friend['upcomingEvents']}'
               : 'No Upcoming Events'),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => GiftListScreen(friendName: friend['name']),
-              ),
-            );
-          },
         );
       },
     );

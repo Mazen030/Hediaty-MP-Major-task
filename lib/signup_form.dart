@@ -59,7 +59,7 @@ class _SignUpFormState extends State<SignUpForm> {
       //   backgroundColor: Color(0xFF6A1B9A), // Purple
       // ),
       body: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(13.0),
         child: Form(
           key: _formKey,
           child: Column(

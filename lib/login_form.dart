@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'database_helper.dart';  // Import DatabaseHelper
-import 'friends_list_screen.dart'; // Import FriendsListScreen
+import 'database_helper.dart';
+import 'friends_list_screen.dart';
 
 class LoginForm extends StatefulWidget {
   @override
@@ -9,35 +9,56 @@ class LoginForm extends StatefulWidget {
 
 class _LoginFormState extends State<LoginForm> {
   final _formKey = GlobalKey<FormState>();
-  final DatabaseHelper _dbHelper = DatabaseHelper(); // Instance of DatabaseHelper
+  final DatabaseHelper _dbHelper = DatabaseHelper();
   String _username = '';
   String _password = '';
+  bool _isLoading = false;
 
   Future<void> _logIn(BuildContext context) async {
     if (_formKey.currentState!.validate()) {
       _formKey.currentState!.save();
 
-      // Check if the username and password are correct
+      setState(() {
+        _isLoading = true;
+      });
+
       bool loginSuccess = await _dbHelper.authenticateUser(_username, _password);
 
+      setState(() {
+        _isLoading = false;
+      });
+
       if (loginSuccess) {
-        // Navigate to Friends List Screen after successful login
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => FriendsListScreen()),
         );
 
-        // Show a welcome message
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Welcome back, $_username!')),
         );
       } else {
-        // Show an error message if login fails
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Invalid username or password')),
-        );
+        _showErrorDialog('Invalid username or password');
       }
     }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('Error'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -48,62 +69,71 @@ class _LoginFormState extends State<LoginForm> {
         key: _formKey,
         child: Column(
           children: [
-            // Username Field
-            TextFormField(
-              decoration: InputDecoration(
-                labelText: 'Username',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+            if (_isLoading)
+              CircularProgressIndicator(),
+            if (!_isLoading) ...[
+              _buildUsernameField(),
+              SizedBox(height: 16),
+              _buildPasswordField(),
+              SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () {
+                    // Handle forgot password
+                  },
+                  child: Text('Forgot Password?'),
                 ),
               ),
-              onSaved: (value) => _username = value!,
-              validator: (value) => value!.isEmpty ? 'Please enter your username' : null,
-            ),
-            SizedBox(height: 16),
-
-            // Password Field
-            TextFormField(
-              decoration: InputDecoration(
-                labelText: 'Password',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+              ElevatedButton(
+                onPressed: () => _logIn(context),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: Size(double.infinity, 50),
+                  backgroundColor: Theme.of(context).primaryColor,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  'Log In',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
-              obscureText: true,
-              onSaved: (value) => _password = value!,
-              validator: (value) => value!.isEmpty ? 'Please enter your password' : null,
-            ),
-            SizedBox(height: 16),
-
-            // Forgot Password Link
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () {
-                  // Handle forgot password
-                },
-                child: Text('Forgot Password?'),
-              ),
-            ),
-
-            // Log-In Button
-            ElevatedButton(
-              onPressed: () => _logIn(context),
-              style: ElevatedButton.styleFrom(
-                minimumSize: Size(double.infinity, 50),
-                backgroundColor: Color(0xFF6A1B9A), // Purple
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Text(
-                'Log In',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
+            ],
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildUsernameField() {
+    return TextFormField(
+      decoration: InputDecoration(
+        labelText: 'Username',
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+      onSaved: (value) => _username = value!.trim().toLowerCase(),
+      validator: (value) => value == null || value.isEmpty ? 'Please enter your username' : null,
+    );
+  }
+
+  Widget _buildPasswordField() {
+    return TextFormField(
+      decoration: InputDecoration(
+        labelText: 'Password',
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+      obscureText: true,
+      onSaved: (value) => _password = value!,
+      validator: (value) {
+        if (value == null || value.isEmpty) return 'Please enter your password';
+        if (value.length < 6) return 'Password must be at least 6 characters long';
+        return null;
+      },
     );
   }
 }
