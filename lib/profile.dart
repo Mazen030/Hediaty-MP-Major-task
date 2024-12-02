@@ -1,8 +1,54 @@
 import 'package:flutter/material.dart';
+import 'database_helper.dart';
 import 'event_listpage.dart';
 import 'My Pledged Gifts Page.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
+  @override
+  _ProfileScreenState createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final DatabaseHelper _databaseHelper = DatabaseHelper();
+  String _username = "Loading...";
+  String _email = "Loading...";
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserData();
+  }
+
+  Future<void> _fetchUserData() async {
+    try {
+      // Get the list of users
+      List<Map<String, dynamic>> users = await _databaseHelper.getUsers();
+
+      // Find the current user based on the currentUserId in DatabaseHelper
+      int currentUserId = _databaseHelper.currentUserId;
+
+      // Find the user with the matching ID
+      var currentUser = users.firstWhere(
+            (user) => user['_id'] == currentUserId,
+        orElse: () => {},
+      );
+
+      // Update state with user information
+      if (currentUser.isNotEmpty) {
+        setState(() {
+          _username = currentUser['username'] ?? "User";
+          _email = currentUser['email'] ?? "No email";
+        });
+      }
+    } catch (e) {
+      print('Error fetching user data: $e');
+      setState(() {
+        _username = "Error";
+        _email = "Error fetching email";
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -35,12 +81,12 @@ class ProfileScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        "Name: User's Name",
+                        "Name: $_username",
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       SizedBox(height: 8.0),
                       Text(
-                        "Email: user@example.com",
+                        "Email: $_email",
                         style: TextStyle(fontSize: 16),
                       ),
                     ],
@@ -57,7 +103,7 @@ class ProfileScreen extends StatelessWidget {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               onTap: () {
-                // Navigate to the event list page for the user's events
+                //Navigate to the event list page for the user's events
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => EventListScreen(isUserEvents: true)),

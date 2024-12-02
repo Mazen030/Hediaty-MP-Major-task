@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-
+import 'database_helper.dart';
 class AddEventScreen extends StatefulWidget {
   final Map<String, dynamic>? event;
 
@@ -22,10 +22,20 @@ class _AddEventScreenState extends State<AddEventScreen> {
     if (widget.event != null) {
       _eventName = widget.event!['name'];
       _eventCategory = widget.event!['category'];
-      _eventDate = widget.event!['date'];
       _eventStatus = widget.event!['status'];
+
+      // Safely handle both String and DateTime formats for the date
+      final date = widget.event!['date'];
+      if (date != null) {
+        if (date is String) {
+          _eventDate = DateTime.parse(date);
+        } else if (date is DateTime) {
+          _eventDate = date;
+        }
+      }
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -119,15 +129,44 @@ class _AddEventScreenState extends State<AddEventScreen> {
     }
   }
 
+  // void _submitForm() {
+  //   if (_formKey.currentState!.validate()) {
+  //     _formKey.currentState!.save();
+  //
+  //     // Ensure all required fields are included
+  //     Navigator.pop(context, {
+  //       'name': _eventName,
+  //       'category': _eventCategory,
+  //       'date': _eventDate?.toIso8601String(),
+  //       'status': _eventStatus,
+  //       'location': '', // Optional
+  //       'description': '', // Optional
+  //       'user_id': DatabaseHelper().currentUserId,
+  //     });
+  //   }
+  // }
   void _submitForm() {
     if (_formKey.currentState!.validate()) {
       _formKey.currentState!.save();
-      Navigator.pop(context, {
-        'name': _eventName,
-        'category': _eventCategory,
-        'date': _eventDate,
-        'status': _eventStatus,
-      });
+
+      // Create the updated event map
+      final updatedEvent = {
+        '_id': widget.event?['_id'], // Ensure the ID is preserved for updates
+        'name': _eventName ?? '',    // Updated event name
+        'category': _eventCategory ?? '', // Updated category
+        'date': _eventDate?.toIso8601String() ?? '', // Updated date
+        'status': _eventStatus ?? '', // Updated status
+        'location': widget.event?['location'] ?? '', // Keep existing location
+        'description': widget.event?['description'] ?? '', // Keep existing description
+        'user_id': DatabaseHelper().currentUserId, // User ID
+      };
+
+      // Return the updated event to the previous screen
+      Navigator.pop(context, updatedEvent);
     }
   }
+
+
+
+
 }

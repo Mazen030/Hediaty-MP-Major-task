@@ -5,7 +5,15 @@ import 'database_helper.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final dbHelper = DatabaseHelper();
-  await dbHelper.debugDatabase();
+
+
+  try {
+    // Force database initialization
+    await dbHelper.database;
+    await dbHelper.debugDatabase();
+  } catch (e) {
+    print('Database initialization error: $e');
+  }
   runApp(MyApp());
 }
 

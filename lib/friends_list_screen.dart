@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'database_helper.dart'; // Import DatabaseHelper
+import 'database_helper.dart';
 import 'gift_list_screen.dart';
 import 'create_event_list_screen.dart';
 import 'event_listpage.dart';
@@ -11,7 +11,7 @@ class FriendsListScreen extends StatefulWidget {
 }
 
 class _FriendsListScreenState extends State<FriendsListScreen> {
-  final DatabaseHelper _databaseHelper = DatabaseHelper(); // DatabaseHelper instance
+  final DatabaseHelper _databaseHelper = DatabaseHelper();
   List<Map<String, dynamic>> _friends = [];
   bool _isLoading = true;
 
@@ -36,6 +36,9 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
       });
     } catch (e) {
       print('Error loading friends: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading friends: $e')),
+      );
       setState(() {
         _isLoading = false;
       });
@@ -43,6 +46,9 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
   }
 
   Future<void> _addFriend() async {
+    // First, debug the database to check current state
+    await _databaseHelper.debugDatabase();
+
     final emailController = TextEditingController();
 
     showDialog(
@@ -52,7 +58,11 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
           title: Text('Add Friend'),
           content: TextField(
             controller: emailController,
-            decoration: InputDecoration(labelText: 'Friend Email'),
+            decoration: InputDecoration(
+              labelText: 'Friend Email',
+              hintText: 'Enter friend\'s email',
+            ),
+            keyboardType: TextInputType.emailAddress,
           ),
           actions: [
             TextButton(
@@ -85,9 +95,6 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
       },
     );
   }
-
-
-
 
   @override
   Widget build(BuildContext context) {
@@ -149,21 +156,21 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
                 child: Icon(Icons.person, size: 28),
               ),
               title: Text(
-                friend['name'],
+                friend['name'] ?? 'Unknown Friend',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
               ),
-              subtitle: Text(
-                friend['upcomingEvents'] > 0
-                    ? 'Upcoming Events: ${friend['upcomingEvents']}'
-                    : 'No Upcoming Events',
-                style: TextStyle(color: Colors.grey[600]),
-              ),
+                subtitle: Text(
+                  (friend['upcomingEvents'] ?? 0) > 0
+                      ? 'Upcoming Events: ${friend['upcomingEvents']}'
+                      : 'No Upcoming Events',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
               onTap: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (context) => GiftListScreen(
-                      friendName: friend['name'],
+                      friendName: friend['name'] ?? 'Friend',
                       isFriendGiftList: true,
                     ),
                   ),
@@ -224,7 +231,9 @@ class FriendSearchDelegate extends SearchDelegate {
   @override
   Widget buildResults(BuildContext context) {
     final results = friends
-        .where((friend) => friend['name'].toLowerCase().contains(query.toLowerCase()))
+        .where((friend) =>
+    friend['name'].toLowerCase().contains(query.toLowerCase()) ||
+        friend['email'].toLowerCase().contains(query.toLowerCase()))
         .toList();
 
     return ListView.builder(
@@ -232,10 +241,17 @@ class FriendSearchDelegate extends SearchDelegate {
       itemBuilder: (context, index) {
         final friend = results[index];
         return ListTile(
-          title: Text(friend['name']),
-          subtitle: Text(friend['upcomingEvents'] > 0
-              ? 'Upcoming Events: ${friend['upcomingEvents']}'
-              : 'No Upcoming Events'),
+          title: Text(friend['name'] ?? 'Unknown'),
+          subtitle: Text(
+            friend['email'] ?? '',
+            style: TextStyle(color: Colors.grey[600]),
+          ),
+          trailing: Text(
+            friend['upcomingEvents'] > 0
+                ? 'Upcoming Events: ${friend['upcomingEvents']}'
+                : 'No Upcoming Events',
+            style: TextStyle(color: Colors.grey[500]),
+          ),
         );
       },
     );

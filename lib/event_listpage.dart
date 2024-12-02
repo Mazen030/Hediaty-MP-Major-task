@@ -93,7 +93,7 @@ class _EventListScreenState extends State<EventListScreen> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               subtitle: Text(
-                '${event['category']} - ${event['status']} - ${event['date'].split(' ')[0]}',
+                '${event['category']} - ${event['status']} - ${event['date'].toString().split(' ')[0]}',
                 style: TextStyle(color: Colors.grey[700]),
               ),
               trailing: widget.isUserEvents
@@ -138,22 +138,69 @@ class _EventListScreenState extends State<EventListScreen> {
     );
 
     if (newEvent != null) {
-      await _databaseHelper.insertEvent(newEvent); // Insert new event into database
-      _loadEvents(); // Reload events
+      // Ensure all required fields are present
+      final requiredFields = ['name', 'category', 'date', 'status'];
+      for (var field in requiredFields) {
+        if (!newEvent.containsKey(field) || newEvent[field] == null) {
+          print('Missing required field: $field');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Missing required field: $field')),
+          );
+          return;
+        }
+      }
+
+      // Convert DateTime to string if needed
+      if (newEvent['date'] is DateTime) {
+        newEvent['date'] = (newEvent['date'] as DateTime).toIso8601String();
+      }
+
+      // Add optional fields with null if not provided
+      final eventToInsert = {
+        'name': newEvent['name'],
+        'category': newEvent['category'],
+        'date': newEvent['date'],
+        'status': newEvent['status'],
+        'user_id': _databaseHelper.currentUserId,
+        'location': newEvent['location'] ?? '',
+        'description': newEvent['description'] ?? '',
+      };
+
+      print('Attempting to insert event: $eventToInsert');
+
+      try {
+        await _databaseHelper.insertEvent(eventToInsert);
+        _loadEvents(); // Reload events
+      } catch (e) {
+        print('Error inserting event: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to add event: ${e.toString()}')),
+        );
+      }
     }
   }
 
-  void _editEvent(int index) async {
+
+
+
+  void _editEvent(Map<String, dynamic> event) async {
+    // Navigate to the AddEventScreen with the current event details
     final updatedEvent = await Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => AddEventScreen(event: _events[index])),
+      MaterialPageRoute(
+        builder: (context) => AddEventScreen(event: event),
+      ),
     );
 
+    // If the user saved changes, refresh the events list
     if (updatedEvent != null) {
-      await _databaseHelper.updateEvent(updatedEvent); // Update event in database
-      _loadEvents(); // Reload events
+      await DatabaseHelper().updateEvent(updatedEvent);
+      _loadEvents(); // Reload events from the database
     }
   }
+
+
+
 
   void _deleteEvent(int index) async {
     await _databaseHelper.deleteEvent(_events[index]['id']); // Delete event from database
@@ -161,10 +208,12 @@ class _EventListScreenState extends State<EventListScreen> {
   }
 
   void _handleEventAction(String action, int index) {
+    final event = _events[index]; // Fetch the event object using the index
+
     if (action == 'edit') {
-      _editEvent(index);
+      _editEvent(event); // Pass the event object
     } else if (action == 'delete') {
-      _deleteEvent(index);
+      _deleteEvent(index); // Keep passing the index for deletion
     }
   }
 

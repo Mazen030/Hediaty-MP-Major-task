@@ -31,15 +31,54 @@ class DatabaseHelper {
     return _database!;
   }
 
-  Future<Database> _initDatabase() async {
-    String path = join(await getDatabasesPath(), _databaseName);
-    return await openDatabase(
-      path,
-      version: _databaseVersion,
-      onCreate: _onCreate,
-    );
+  Future<void> onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+      CREATE TABLE events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        date TEXT NOT NULL,
+        status TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        location TEXT,
+        description TEXT
+      )
+    ''');
+    }
   }
 
+
+
+
+
+
+
+
+  Future<Database> _initDatabase() async {
+    try {
+      String path = join(await getDatabasesPath(), _databaseName);
+      print('Database path: $path');
+
+      return await openDatabase(
+        path,
+        version: _databaseVersion,
+        onCreate: _onCreate,
+        onConfigure: _onConfigure,
+        onOpen: (db) {
+          print('Database opened successfully');
+        },
+      );
+    } catch (e) {
+      print('Error initializing database: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _onConfigure(Database db) async {
+    print('Configuring database');
+    await db.execute('PRAGMA foreign_keys = ON');
+  }
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE $tableUsers (
@@ -52,16 +91,18 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE $tableEvents (
-        _id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        date TEXT NOT NULL,
-        location TEXT,
-        description TEXT,
-        user_id INTEGER,
-        FOREIGN KEY (user_id) REFERENCES $tableUsers (_id)
-      )
-    ''');
+  CREATE TABLE $tableEvents (
+    _id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    category TEXT,
+    date TEXT NOT NULL,
+    location TEXT,
+    description TEXT,
+    status TEXT,
+    user_id INTEGER,
+    FOREIGN KEY (user_id) REFERENCES $tableUsers (_id)
+  )
+''');
 
     await db.execute('''
       CREATE TABLE $tableGifts (
@@ -127,8 +168,17 @@ class DatabaseHelper {
   // ========================= Event Methods =========================
   Future<List<Map<String, dynamic>>> getUserEvents() async {
     final db = await database;
-    return await db.query(tableEvents, where: 'user_id = ?', whereArgs: [currentUserId]);
+    final events = await db.query('events', where: 'user_id = ?', whereArgs: [currentUserId]);
+
+    return events.map((event) {
+      return {
+        ...event,
+        'date': DateTime.tryParse(event['date'] as String) ?? event['date'], // Parse string back to DateTime
+      };
+    }).toList();
   }
+
+
 
   Future<List<Map<String, dynamic>>> getFriendsEvents() async {
     final db = await database;
@@ -136,14 +186,29 @@ class DatabaseHelper {
   }
 
   Future<int> insertEvent(Map<String, dynamic> event) async {
+    // Ensure user_id is set
+    event['user_id'] = currentUserId;
+
     final db = await database;
     return await db.insert(tableEvents, event);
   }
 
   Future<int> updateEvent(Map<String, dynamic> event) async {
+    print("Updating event: $event");
+
+    if (event['_id'] == null) {
+      throw ArgumentError("Event must have a valid '_id'. Received: ${event['_id']}");
+    }
+
     final db = await database;
-    return await db.update(tableEvents, event, where: '_id = ?', whereArgs: [event['_id']]);
+    return await db.update(
+      tableEvents,
+      event,
+      where: '_id = ?',
+      whereArgs: [event['_id']],
+    );
   }
+
 
   Future<int> deleteEvent(int id) async {
     final db = await database;
@@ -237,16 +302,40 @@ class DatabaseHelper {
     }
   }
   Future<void> debugDatabase() async {
-    final db = await database;
-    final tables = await db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table';"
-    );
-    print('Tables in database: $tables');
 
-    for (var table in tables) {
-      final tableName = table['name'];
-      final columns = await db.rawQuery('PRAGMA table_info($tableName);');
-      print('Columns in $tableName: $columns');
+    try {
+      final db = await database; // This ensures database is initialized
+
+      print('Database Path: ${await getDatabasesPath()}');
+
+      final tables = await db.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type='table';"
+      );
+      print('Tables in database: $tables');
+
+      if (tables.isEmpty) {
+        print('NO TABLES FOUND IN DATABASE');
+        return;
+      }
+
+      for (var table in tables) {
+        final tableName = table['name'];
+        print('Examining table: $tableName');
+
+        final columns = await db.rawQuery('PRAGMA table_info($tableName);');
+        print('Columns in $tableName: $columns');
+      }
+    } catch (e) {
+      print('Error in debugDatabase: $e');
     }
   }
+
+  Future<bool> doesTableExist(Database db, String tableName) async {
+    final result = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+      [tableName],
+    );
+    return result.isNotEmpty;
+  }
+
 }
