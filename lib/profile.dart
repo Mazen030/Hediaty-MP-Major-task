@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'database_helper.dart';
 import 'event_listpage.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'My Pledged Gifts Page.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -21,23 +22,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _fetchUserData() async {
     try {
-      // Get the list of users
-      List<Map<String, dynamic>> users = await _databaseHelper.getUsers();
+      // Get the current Firebase user
+      User? currentUser = FirebaseAuth.instance.currentUser;
 
-      // Find the current user based on the currentUserId in DatabaseHelper
-      int currentUserId = _databaseHelper.currentUserId;
+      if (currentUser != null) {
+        // Fetch user details from local database using email
+        final userDetails = await _databaseHelper.getUserByEmail(currentUser.email!);
 
-      // Find the user with the matching ID
-      var currentUser = users.firstWhere(
-            (user) => user['_id'] == currentUserId,
-        orElse: () => {},
-      );
-
-      // Update state with user information
-      if (currentUser.isNotEmpty) {
+        if (userDetails != null) {
+          setState(() {
+            _username = userDetails['username'] ?? currentUser.displayName ?? "User";
+            _email = currentUser.email ?? "No email";
+          });
+        } else {
+          setState(() {
+            _username = currentUser.displayName ?? "User";
+            _email = currentUser.email ?? "No email";
+          });
+        }
+      } else {
         setState(() {
-          _username = currentUser['username'] ?? "User";
-          _email = currentUser['email'] ?? "No email";
+          _username = "No User";
+          _email = "Not Logged In";
         });
       }
     } catch (e) {

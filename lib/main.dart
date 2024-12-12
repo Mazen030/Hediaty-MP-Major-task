@@ -1,19 +1,21 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
+import 'firebase_options.dart'; // Import the generated file
 import 'home_screen.dart';
-import 'database_helper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final dbHelper = DatabaseHelper();
 
+  // Initialize Firebase with DefaultFirebaseOptions
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
-  try {
-    // Force database initialization
-    await dbHelper.database;
-    await dbHelper.debugDatabase();
-  } catch (e) {
-    print('Database initialization error: $e');
-  }
+  // Set up Firebase Realtime Database and enable offline persistence
+  FirebaseDatabase.instance.setPersistenceEnabled(true);
+  FirebaseDatabase.instance.databaseURL = 'https://hedieaty-c83b1-default-rtdb.firebaseio.com/';
+
   runApp(MyApp());
 }
 
@@ -22,12 +24,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Hedieaty',
-      theme: ThemeData(
-        primaryColor: Color(0xFF6A1B9A), // Purple theme
-        scaffoldBackgroundColor: Colors.white,
-      ),
-      home: HomeScreen(), // Start with the HomeScreen
+      home: HomeScreen(),
     );
   }
 }

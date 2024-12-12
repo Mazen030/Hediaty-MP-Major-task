@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'database_helper.dart';  // Adjust import path
+import 'database_helper.dart';
 import 'add_gift_screen.dart';
-
 
 class GiftListScreen extends StatefulWidget {
   final String friendName;
   final bool isFriendGiftList;
-  final int? eventId;  // Add event ID to link gifts to a specific event
+  final int? eventId;
 
   GiftListScreen({
     required this.friendName,
@@ -20,7 +19,7 @@ class GiftListScreen extends StatefulWidget {
 
 class _GiftListScreenState extends State<GiftListScreen> {
   List<Map<String, dynamic>> _gifts = [];
-  String _sortBy = 'Name'; // Default sort criterion
+  String _sortBy = 'Name';
   final DatabaseHelper _databaseHelper = DatabaseHelper();
 
   @override
@@ -29,14 +28,22 @@ class _GiftListScreenState extends State<GiftListScreen> {
     _loadGifts();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _loadGifts();
+  }
+
   Future<void> _loadGifts() async {
     if (widget.eventId != null) {
-      // Load gifts for a specific event
       final gifts = await _databaseHelper.getGiftsForEvent(widget.eventId!);
-      setState(() {
-        _gifts = gifts;
-        _sortGifts();
-      });
+
+      if (mounted) {
+        setState(() {
+          _gifts = gifts;
+          _sortGifts();
+        });
+      }
     }
   }
 
@@ -79,7 +86,9 @@ class _GiftListScreenState extends State<GiftListScreen> {
               ),
             ),
           Expanded(
-            child: ListView.builder(
+            child: _gifts.isEmpty
+                ? Center(child: Text('No gifts added yet'))
+                : ListView.builder(
               itemCount: _gifts.length,
               itemBuilder: (context, index) {
                 final gift = _gifts[index];
@@ -90,9 +99,18 @@ class _GiftListScreenState extends State<GiftListScreen> {
                     subtitle: Text('Category: ${gift['category'] ?? 'N/A'}'),
                     trailing: widget.isFriendGiftList
                         ? _buildPledgeButton(gift, index)
-                        : IconButton(
-                      icon: Icon(Icons.edit),
-                      onPressed: () => _editGift(index),
+                        : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.edit),
+                          onPressed: () => _editGift(index),
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.delete),
+                          onPressed: () => _deleteGift(index),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -126,27 +144,23 @@ class _GiftListScreenState extends State<GiftListScreen> {
   }
 
   void _addGift() async {
-    // Prepare gift data with event ID
+    if (widget.eventId == null) {
+      print('Warning: No event ID set when adding gift');
+      return;
+    }
+
     final newGift = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => AddGiftScreen(
-          eventId: widget.eventId,  // Pass event ID to add gift screen
+          eventId: widget.eventId,
         ),
       ),
     );
 
     if (newGift != null) {
-      // Insert gift into database
-      final giftId = await _databaseHelper.insertGift(newGift);
-
-      // Verify insertion and update local state
-      if (giftId > 0) {
-        setState(() {
-          _gifts.add({...newGift, '_id': giftId});
-          _sortGifts();
-        });
-      }
+      print('New gift added: $newGift');
+      await _loadGifts();
     }
   }
 
@@ -161,28 +175,36 @@ class _GiftListScreenState extends State<GiftListScreen> {
     );
 
     if (updatedGift != null) {
-      // Update gift in database
-      final result = await _databaseHelper.updateGift(updatedGift);
+      await _loadGifts();
+    }
+  }
+
+  void _deleteGift(int index) async {
+    final gift = _gifts[index];
+
+    try {
+      final result = await _databaseHelper.deleteGift(gift['_id']);
 
       if (result > 0) {
-        setState(() {
-          _gifts[index] = updatedGift;
-          _sortGifts();
-        });
+        await _loadGifts();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gift deleted successfully')),
+        );
       }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete gift: $e')),
+      );
     }
   }
 
   void _pledgeGift(int index) async {
     final gift = _gifts[index];
 
-    // Update pledge status in database
     final result = await _databaseHelper.pledgeGift(gift['_id']);
 
     if (result > 0) {
-      setState(() {
-        _gifts[index]['pledged'] = 1;
-      });
+      await _loadGifts();
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('You pledged to give "${gift['name']}"')),

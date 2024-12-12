@@ -105,6 +105,17 @@ class _EventListScreenState extends State<EventListScreen> {
                 ],
               )
                   : null, // No actions for friend's events
+              // onTap: () {
+              //   Navigator.push(
+              //     context,
+              //     MaterialPageRoute(
+              //       builder: (context) => GiftListScreen(
+              //         friendName: event['name'],
+              //         isFriendGiftList: !widget.isUserEvents,
+              //       ),
+              //     ),
+              //   );
+              // },
               onTap: () {
                 Navigator.push(
                   context,
@@ -112,10 +123,12 @@ class _EventListScreenState extends State<EventListScreen> {
                     builder: (context) => GiftListScreen(
                       friendName: event['name'],
                       isFriendGiftList: !widget.isUserEvents,
+                      eventId: event['_id'], // Pass the event ID
                     ),
                   ),
                 );
               },
+
             ),
           );
         },

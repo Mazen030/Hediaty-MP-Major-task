@@ -47,7 +47,7 @@ class SignUpLoginScreen extends StatelessWidget {
             Expanded(
               child: TabBarView(
                 children: [
-                  SignUpForm(), // Sign-up form
+                  SignupScreen(), // Sign-up form
                   LoginForm(), // Log-in form
                 ],
               ),

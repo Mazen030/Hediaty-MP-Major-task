@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'database_helper.dart';  // Adjust import path
+import 'database_helper.dart';
 
 class AddGiftScreen extends StatefulWidget {
   final Map<String, dynamic>? gift;
-  final int? eventId;  // Optional event ID when adding a gift
+  final int? eventId;
 
   const AddGiftScreen({Key? key, this.gift, this.eventId}) : super(key: key);
 
@@ -24,7 +24,6 @@ class _AddGiftScreenState extends State<AddGiftScreen> {
   void initState() {
     super.initState();
 
-    // Initialize controllers with existing gift data or empty strings
     _nameController = TextEditingController(text: _getInitialText(widget.gift, 'name'));
     _descriptionController = TextEditingController(text: _getInitialText(widget.gift, 'description'));
     _categoryController = TextEditingController(text: _getInitialText(widget.gift, 'category'));
@@ -33,12 +32,10 @@ class _AddGiftScreenState extends State<AddGiftScreen> {
     );
   }
 
-  // Helper method to safely get initial text
   String _getInitialText(Map<String, dynamic>? gift, String key) {
     return gift != null && gift[key] != null ? gift[key].toString() : '';
   }
 
-  // Helper method to safely get initial price
   String _getInitialPrice(Map<String, dynamic>? gift) {
     if (gift != null && gift['price'] != null) {
       return gift['price'].toString();
@@ -48,7 +45,6 @@ class _AddGiftScreenState extends State<AddGiftScreen> {
 
   @override
   void dispose() {
-    // Dispose controllers to prevent memory leaks
     _nameController.dispose();
     _descriptionController.dispose();
     _categoryController.dispose();
@@ -118,46 +114,42 @@ class _AddGiftScreenState extends State<AddGiftScreen> {
     );
   }
 
-  // Helper method to check if in edit mode
   bool _isEditMode() {
     return widget.gift != null && widget.gift!['_id'] != null;
   }
 
   void _saveGift() async {
-    // Ensure form is valid before proceeding
     if (_formKey.currentState != null && _formKey.currentState!.validate()) {
-      // Prepare gift data
       Map<String, dynamic> giftData = {
         'name': _nameController.text,
         'description': _descriptionController.text,
         'category': _categoryController.text,
         'price': double.tryParse(_priceController.text) ?? 0.0,
-        'status': 'active',  // Default status
-        'pledged': 0,  // Not pledged by default
+        'status': 'active',
+        'pledged': 0,
       };
 
-      // If editing an existing gift, include the ID
-      if (_isEditMode()) {
-        giftData['_id'] = widget.gift!['_id'];
-      }
-
-      // If adding to a specific event, include event ID
       if (widget.eventId != null) {
         giftData['event_id'] = widget.eventId;
+        print('Saving gift with event ID: ${widget.eventId}');
+      } else {
+        print('Warning: No event ID when saving gift');
       }
 
       try {
-        // Insert or update gift
+        int result;
         if (!_isEditMode()) {
-          await _databaseHelper.insertGift(giftData);
+          result = await _databaseHelper.insertGift(giftData);
+          print('Gift inserted with ID: $result');
         } else {
-          await _databaseHelper.updateGift(giftData);
+          giftData['_id'] = widget.gift!['_id'];
+          result = await _databaseHelper.updateGift(giftData);
+          print('Gift updated: $result');
         }
 
-        // Close the screen and return the gift data
         Navigator.pop(context, giftData);
       } catch (e) {
-        // Show error if save fails
+        print('Error saving gift: $e');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to save gift: $e')),
         );

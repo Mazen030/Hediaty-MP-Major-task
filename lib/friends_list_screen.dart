@@ -176,6 +176,18 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
                   ),
                 );
               },
+              // onTap: () {
+              //   Navigator.push(
+              //     context,
+              //     MaterialPageRoute(
+              //       builder: (context) => GiftListScreen(
+              //         friendName: friend['name'] ?? 'Friend',
+              //         isFriendGiftList: true,
+              //         eventId: friend['eventId'] ?? 0, // Replace with actual logic for eventId
+              //       ),
+              //     ),
+              //   );
+              // },
             ),
           );
         },
