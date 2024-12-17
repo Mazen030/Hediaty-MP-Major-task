@@ -10,7 +10,7 @@ class DatabaseHelper {
 
   static Database? _database;
   static final String _databaseName = "app_database.db";
-  static final int _databaseVersion = 1;
+  static final int _databaseVersion = 3; // Increment version
 
   // Table Names
   static final String tableUsers = 'users';
@@ -33,20 +33,30 @@ class DatabaseHelper {
     return _database!;
   }
 
-  Future<void> onUpgrade(Database db, int oldVersion, int newVersion) async {
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
+      // Previous upgrade step
       await db.execute('''
-      CREATE TABLE events (
+      ALTER TABLE $tableGifts ADD COLUMN firestoreId TEXT;
+    ''');
+      print('Database upgraded to version 2');
+    }
+
+    if (oldVersion < 3) {
+      // New upgrade step for pledged_gifts table
+      await db.execute('''
+      CREATE TABLE pledged_gifts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        category TEXT NOT NULL,
-        date TEXT NOT NULL,
-        status TEXT NOT NULL,
-        user_id INTEGER NOT NULL,
-        location TEXT,
-        description TEXT
+        gift_id INTEGER,
+        gift_name TEXT,
+        friend_name TEXT,
+        due_date TEXT,
+        gift_status TEXT,
+        FOREIGN KEY (gift_id) REFERENCES $tableGifts (_id)
       )
     ''');
+      print('Database upgraded to version 3');
     }
   }
 
@@ -59,6 +69,7 @@ class DatabaseHelper {
         path,
         version: _databaseVersion,
         onCreate: _onCreate,
+        onUpgrade: _onUpgrade, //added onUpgrade
         onConfigure: _onConfigure,
         onOpen: (db) {
           print('Database opened successfully');
@@ -75,53 +86,25 @@ class DatabaseHelper {
     await db.execute('PRAGMA foreign_keys = ON');
   }
   Future<void> _onCreate(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE $tableUsers (
-        _id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL,
-        preferences TEXT
-      )
-    ''');
+    await db.execute('CREATE TABLE $tableUsers (_id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password TEXT NOT NULL, preferences TEXT)');
+
+    await db.execute('CREATE TABLE $tableEvents (_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT, date TEXT NOT NULL, location TEXT, description TEXT, status TEXT, user_id INTEGER, firestoreId TEXT, FOREIGN KEY (user_id) REFERENCES $tableUsers (_id))');
+
+    await db.execute('CREATE TABLE $tableGifts (_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT, category TEXT, price REAL, status TEXT NOT NULL, event_id INTEGER, pledged INTEGER DEFAULT 0, firestoreId TEXT, FOREIGN KEY (event_id) REFERENCES $tableEvents (_id))'); // Added firestoreId here
+
+    await db.execute('CREATE TABLE $tableFriends (user_id INTEGER, friend_id INTEGER, PRIMARY KEY (user_id, friend_id), FOREIGN KEY (user_id) REFERENCES $tableUsers (_id), FOREIGN KEY (friend_id) REFERENCES $tableUsers (_id))');
 
     await db.execute('''
-  CREATE TABLE $tableEvents (
-    _id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    category TEXT,
-    date TEXT NOT NULL,
-    location TEXT,
-    description TEXT,
-    status TEXT,
-    user_id INTEGER,
-    FOREIGN KEY (user_id) REFERENCES $tableUsers (_id)
-  )
-''');
-
-    await db.execute('''
-      CREATE TABLE $tableGifts (
-        _id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        description TEXT,
-        category TEXT,
-        price REAL,
-        status TEXT NOT NULL,
-        event_id INTEGER,
-        pledged INTEGER DEFAULT 0,
-        FOREIGN KEY (event_id) REFERENCES $tableEvents (_id)
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE $tableFriends (
-        user_id INTEGER,
-        friend_id INTEGER,
-        PRIMARY KEY (user_id, friend_id),
-        FOREIGN KEY (user_id) REFERENCES $tableUsers (_id),
-        FOREIGN KEY (friend_id) REFERENCES $tableUsers (_id)
-      )
-    ''');
+    CREATE TABLE pledged_gifts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gift_id INTEGER,
+      gift_name TEXT,
+      friend_name TEXT,
+      due_date TEXT,
+      gift_status TEXT,
+      FOREIGN KEY (gift_id) REFERENCES $tableGifts (_id)
+    )
+  ''');
   }
 
   Future<void> resetDatabase() async {
@@ -219,45 +202,11 @@ class DatabaseHelper {
     return result.isNotEmpty ? result.first : null;
   }
 
-  // Future<bool> authenticateUser(String username, String password) async {
-  //   final db = await database;
-  //   final result = await db.rawQuery(
-  //     'SELECT * FROM $tableUsers WHERE username = ? AND password = ?',
-  //     [username, password],
-  //   );
-  //
-  //   if (result.isNotEmpty) {
-  //     int userId = result.first['_id'] as int;
-  //     await SessionManager().setCurrentUserId(userId);
-  //     return true;
-  //   }
-  //   return false;
-  // }
-
 
 
 
   // ========================= Event Methods =========================
-  // Future<List<Map<String, dynamic>>> getUserEvents() async {
-  //   final db = await database;
-  //   final currentUserId = await getCurrentUserId();
-  //   if (currentUserId == null) {
-  //     throw Exception('No user is currently logged in.');
-  //   }
-  //
-  //   final events = await db.query(
-  //     tableEvents,
-  //     where: 'user_id = ?',
-  //     whereArgs: [currentUserId],
-  //   );
-  //
-  //   return events.map((event) {
-  //     return {
-  //       ...event,
-  //       'date': DateTime.tryParse(event['date'] as String) ?? event['date'], // Parse string back to DateTime
-  //     };
-  //   }).toList();
-  // }
+
   Future<List<Map<String, dynamic>>> getUserEvents() async {
     final db = await database;
     final currentUserId = await getCurrentUserId();
@@ -288,22 +237,18 @@ class DatabaseHelper {
   }
 
 
-  // Future<int> insertEvent(Map<String, dynamic> event) async {
-  //   event['user_id'] = currentUserId;
-  //
-  //   final db = await database;
-  //   int id = await db.insert(tableEvents, event);
-  //   print('Inserted event with ID: $id'); // Add logging
-  //   return id;
-  // }
-  Future<int> insertEvent(Map<String, dynamic> event) async {
+  Future<int> insertEvent(Map<String, dynamic> event, String firestoreId) async {
     final db = await database;
     final currentUserId = await getCurrentUserId();
     if (currentUserId == null) {
       throw Exception('No user is currently logged in.');
     }
     event['user_id'] = currentUserId;
-    return await db.insert(tableEvents, event);
+    event['firestoreId'] = firestoreId; // Store the Firestore ID
+
+    final id = await db.insert(tableEvents, event);
+
+    return id;
   }
 
 
@@ -339,9 +284,9 @@ class DatabaseHelper {
       whereArgs: [event['_id']],
     );
   }
-  Future<int> deleteEvent(int id) async {
+  //modified method to get the firestore id and use it for deletion
+  Future<String?> deleteEvent(int id) async { // Return the firestoreId
     final db = await database;
-    //final currentUserId = await SessionManager().getCurrentUserId();
     final currentUserId = await getCurrentUserId();
     if (currentUserId == null) {
       throw Exception("No user is currently logged in.");
@@ -357,12 +302,27 @@ class DatabaseHelper {
     if (result.isEmpty) {
       throw Exception("Event does not belong to the current user.");
     }
+    // Get the firestore id of the event
+    final eventToDelete = await db.query(
+      tableEvents,
+      columns: ['firestoreId'],
+      where: '_id = ?',
+      whereArgs: [id],
+    );
+    // Extract the firestoreId from the query
+    final firestoreId = eventToDelete.isNotEmpty ? eventToDelete.first['firestoreId'] as String? : null;
 
-    return await db.delete(
+    if (firestoreId == null){
+      throw Exception ("Firestore ID not found for the event.");
+    }
+
+    //Delete the event
+    await db.delete(
       tableEvents,
       where: '_id = ?',
       whereArgs: [id],
     );
+    return firestoreId; // Return the firestoreId
   }
 
 
@@ -393,15 +353,41 @@ class DatabaseHelper {
     return await db.update(tableGifts, gift, where: '_id = ?', whereArgs: [gift['_id']]);
   }
 
+  // Future<int> pledgeGift(int giftId) async {
+  //   final db = await database;
+  //   return await db.update(
+  //     tableGifts,
+  //     {'pledged': 1},
+  //     where: '_id = ?',
+  //     whereArgs: [giftId],
+  //   );
+  // }
   Future<int> pledgeGift(int giftId) async {
     final db = await database;
+
+    // Check if the gift exists before updating
+    final gift = await db.query(
+      tableGifts,
+      where: '_id = ?',
+      whereArgs: [giftId],
+    );
+
+    if (gift.isEmpty) {
+      print('Gift with ID $giftId not found in database');
+      throw Exception('Gift not found');
+    }
+
     return await db.update(
       tableGifts,
-      {'pledged': 1},
+      {'pledged': 1}, // Mark gift as pledged
       where: '_id = ?',
       whereArgs: [giftId],
     );
   }
+
+
+
+
   // Add this method to the existing DatabaseHelper class
   Future<int> deleteGift(int giftId) async {
     final db = await database;
@@ -411,42 +397,135 @@ class DatabaseHelper {
         whereArgs: [giftId]
     );
   }
+  // Inside DatabaseHelper class
 
-  // ========================= Friends Methods =========================
+  // Future<List<Map<String, dynamic>>> getPledgedGifts() async {
+  //   final db = await database;
+  //   final currentUserId = await getCurrentUserId();
+  //
+  //   if (currentUserId == null) {
+  //     throw Exception("No user is currently logged in.");
+  //   }
+  //
+  //   return await db.rawQuery('''
+  //   SELECT
+  //       g._id AS gift_id,
+  //       g.name AS gift_name,
+  //       u.username AS friend_name,
+  //       e.date AS due_date,
+  //       g.status AS gift_status
+  //   FROM gifts g
+  //   INNER JOIN events e ON g.event_id = e._id
+  //   INNER JOIN users u ON e.user_id = u._id
+  //   WHERE g.pledged = 1 AND g.pledged_by = ?
+  //   ''', [currentUserId]);
+  // }
+  Future<List<Map<String, dynamic>>> getPledgedGifts() async {
+    final db = await database;
+    final currentUserId = await getCurrentUserId();
 
-  Future<List<Map<String, dynamic>>> getFriendsList() async {
+    if (currentUserId == null) {
+      throw Exception("No user is currently logged in.");
+    }
+
+    return await db.rawQuery('''
+  SELECT 
+      pg.id,
+      pg.gift_id,
+      pg.gift_name,
+      pg.friend_name,
+      pg.due_date,
+      pg.gift_status
+  FROM pledged_gifts pg
+  JOIN gifts g ON pg.gift_id = g._id
+  JOIN events e ON g.event_id = e._id
+  JOIN friends f ON e.user_id = f.friend_id
+  WHERE f.user_id = ? AND pg.gift_status = 'pending'
+  ''', [currentUserId]);
+  }
+// Update gift status to fulfilled
+  Future<int> fulfillGift(int giftId) async {
+    final db = await database;
+    return await db.update(
+      tableGifts,
+      {'status': 'fulfilled'}, // Or whatever your 'fulfilled' status is
+      where: '_id = ?',
+      whereArgs: [giftId],
+    );
+  }
+
+
+  Future<void> unpledgeGift(int giftId) async {
+    final db = await database;
+    await db.delete('pledged_gifts', where: 'gift_id = ?', whereArgs: [giftId]);
+  }
+  Future<void> createPledgedGift({
+    required int giftId,
+    required String giftName,
+    required String friendName,
+    required DateTime dueDate,
+    required String giftStatus
+  }) async {
     final db = await database;
     final currentUserId = await getCurrentUserId();
     if (currentUserId == null) {
       throw Exception("No user is currently logged in.");
     }
 
-    return await db.rawQuery('''
+    await db.insert('pledged_gifts', {
+      'gift_id': giftId,
+      'gift_name': giftName,
+      'friend_name': friendName,
+      'due_date': dueDate.toIso8601String(),
+      'gift_status': giftStatus
+    });
+  }
+  // ========================= Friends Methods =========================
+
+  // Future<List<Map<String, dynamic>>> getFriendsList() async {
+  //   final db = await database;
+  //   final currentUserId = await getCurrentUserId();
+  //   if (currentUserId == null) {
+  //     throw Exception("No user is currently logged in.");
+  //   }
+  //
+  //   return await db.rawQuery('''
+  //   SELECT f.friend_id,
+  //          u.username AS name,
+  //          u.email,
+  //          COUNT(e._id) AS upcomingEvents
+  //   FROM friends f
+  //   LEFT JOIN users u ON f.friend_id = u._id
+  //   LEFT JOIN events e ON e.user_id = f.friend_id AND e.date > ?
+  //   WHERE f.user_id = ?
+  //   GROUP BY f.friend_id, u.username, u.email
+  //   ''', [DateTime.now().toIso8601String(), currentUserId]);
+  // }
+
+  Future<List<Map<String, dynamic>>> getFriendsList() async {
+    final db = await database;
+    final currentUserId = await getCurrentUserId();
+    print('📋 Retrieving friends for User ID: $currentUserId');
+
+    if (currentUserId == null) {
+      throw Exception("No user is currently logged in.");
+    }
+
+    final friends = await db.rawQuery('''
     SELECT f.friend_id, 
            u.username AS name, 
            u.email, 
            COUNT(e._id) AS upcomingEvents
     FROM friends f
     LEFT JOIN users u ON f.friend_id = u._id
-    LEFT JOIN events e ON e.user_id = f.friend_id AND e.date > ?
+    LEFT JOIN events e ON e.user_id = f.friend_id AND e.date >= ?
     WHERE f.user_id = ?
     GROUP BY f.friend_id, u.username, u.email
     ''', [DateTime.now().toIso8601String(), currentUserId]);
+
+    print('👥 Friends found: $friends');
+    return friends;
   }
-
-  // Future<List<Map<String, dynamic>>> getFriendsList() async {
-  //   final db = await database;
-  //   return await db.rawQuery('''
-  //   SELECT f.friend_id, u.username AS name, u.email,
-  //          COUNT(e._id) as upcomingEvents
-  //   FROM friends f
-  //   LEFT JOIN users u ON f.friend_id = u._id
-  //   LEFT JOIN events e ON e.user_id = f.friend_id AND e.date > ?
-  //   WHERE f.user_id = ?
-  //   GROUP BY f.friend_id
-  // ''', [DateTime.now().toIso8601String(), currentUserId]);
-  // }
-
 
 
   Future<int> insertFriend(Map<String, dynamic> friend) async {
@@ -493,16 +572,49 @@ class DatabaseHelper {
     );
   }
 
+  // Future<int> addFriend(String friendEmail) async {
+  //   if (friendEmail == null || friendEmail.isEmpty) {
+  //     throw Exception('Friend email cannot be null or empty');
+  //   }
+  //
+  //   final db = await database;
+  //   //final currentUserId = await SessionManager().getCurrentUserId();
+  //   final currentUserId = await getCurrentUserId();
+  //   if (currentUserId == null) {
+  //     throw Exception("No user is currently logged in.");
+  //   }
+  //
+  //   // Fetch the friend's user ID using their email
+  //   final result = await db.query(
+  //     tableUsers,
+  //     columns: ['_id'],
+  //     where: 'email = ?',
+  //     whereArgs: [friendEmail],
+  //   );
+  //
+  //   if (result.isNotEmpty) {
+  //     int friendId = (result.first['_id'] ?? 0) as int;
+  //
+  //     // Create a map with the necessary details
+  //     Map<String, dynamic> friend = {
+  //       'user_id': currentUserId,
+  //       'friend_id': friendId,
+  //     };
+  //
+  //     return await insertFriend(friend);
+  //   } else {
+  //     throw Exception('Friend with email $friendEmail not found');
+  //   }
+  // }
   Future<int> addFriend(String friendEmail) async {
-    if (friendEmail == null || friendEmail.isEmpty) {
-      throw Exception('Friend email cannot be null or empty');
-    }
+    print('🔍 Attempting to add friend with email: $friendEmail');
 
     final db = await database;
-    //final currentUserId = await SessionManager().getCurrentUserId();
     final currentUserId = await getCurrentUserId();
-    if (currentUserId == null) {
-      throw Exception("No user is currently logged in.");
+    print('🔑 Current User ID: $currentUserId');
+
+    if(currentUserId == null){
+      throw Exception("No user is logged in.");
     }
 
     // Fetch the friend's user ID using their email
@@ -513,16 +625,49 @@ class DatabaseHelper {
       whereArgs: [friendEmail],
     );
 
+    print('👥 Friend query result: $result');
+
     if (result.isNotEmpty) {
       int friendId = (result.first['_id'] ?? 0) as int;
+      print('🆔 Friend ID found: $friendId');
 
-      // Create a map with the necessary details
-      Map<String, dynamic> friend = {
+      if(currentUserId == friendId){
+        throw Exception("You can not add yourself as a friend!");
+      }
+
+      // Check existing friendship
+      final existingFriendship = await db.query(
+        tableFriends,
+        where: '(user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)',
+        whereArgs: [currentUserId, friendId, friendId, currentUserId],
+      );
+
+      print('🤝 Existing friendship check: $existingFriendship');
+
+      if (existingFriendship.isNotEmpty) {
+        throw Exception("Friendship already exists.");
+      }
+
+      Map<String, dynamic> friend1 = {
         'user_id': currentUserId,
         'friend_id': friendId,
       };
+      print('Friend 1 data to insert: $friend1'); //Debug
 
-      return await insertFriend(friend);
+      Map<String, dynamic> friend2 = {
+        'user_id': friendId,
+        'friend_id': currentUserId,
+      };
+      print('Friend 2 data to insert: $friend2'); //Debug
+
+      print('📝 Friendship details to insert:');
+      print('Friend 1: $friend1');
+      print('Friend 2: $friend2');
+
+      await insertFriend(friend1);
+      await insertFriend(friend2);
+
+      return 1;
     } else {
       throw Exception('Friend with email $friendEmail not found');
     }
@@ -587,5 +732,3 @@ class DatabaseHelper {
   }
 
 }
-
-

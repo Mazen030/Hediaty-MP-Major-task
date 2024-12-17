@@ -2,11 +2,14 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'database_helper.dart'; // Import your existing DatabaseHelper
+import 'firestore_service.dart';
 
 class FirebaseGiftSync {
   final DatabaseHelper _localDb = DatabaseHelper();
   final FirebaseDatabase _database = FirebaseDatabase.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  final FirestoreService _firestoreService = FirestoreService();
 
   // Gift status constants
   static const String STATUS_AVAILABLE = 'available';
@@ -19,6 +22,8 @@ class FirebaseGiftSync {
     STATUS_PLEDGED: Colors.green.shade100,
     STATUS_PURCHASED: Colors.red.shade100,
   };
+
+
 
   // Sync a single event's gifts to Firebase
   Future<void> syncEventGiftsToFirebase(int eventId) async {
@@ -116,15 +121,15 @@ class FirebaseGiftSync {
 
   // Initial sync of all gifts when a user logs in
   Future<void> initialGiftsSync() async {
-    try {
-      // Get current user's events
-      List<Map<String, dynamic>> events = await _localDb.getUserEvents();
+    User? firebaseUser = FirebaseAuth.instance.currentUser;
 
-      for (var event in events) {
-        await syncEventGiftsToFirebase(event['_id']);
-      }
-    } catch (e) {
-      print('Error during initial gifts sync: $e');
+    if (firebaseUser != null){
+      await _firestoreService.syncFirebaseUser(firebaseUser);
     }
+
+
+    //await _firestoreService.migrateDataToFirestore();
+    print("Initial Gifts Sync Finished");
+
   }
 }

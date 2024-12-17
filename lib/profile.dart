@@ -3,6 +3,7 @@ import 'database_helper.dart';
 import 'event_listpage.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'My Pledged Gifts Page.dart';
+import 'firestore_service.dart'; // Import FirestoreService
 
 class ProfileScreen extends StatefulWidget {
   @override
@@ -11,6 +12,7 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   final DatabaseHelper _databaseHelper = DatabaseHelper();
+  final FirestoreService _firestoreService = FirestoreService(); // Add Firestore Service
   String _username = "Loading...";
   String _email = "Loading...";
 
@@ -40,6 +42,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _email = currentUser.email ?? "No email";
           });
         }
+
+        await _firestoreService.syncFirebaseUser(currentUser);
+
       } else {
         setState(() {
           _username = "No User";

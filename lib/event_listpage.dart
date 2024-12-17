@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
-import 'gift_list_screen.dart'; // For navigating to the Gift List page
-import 'add_event_screen.dart'; // For adding and editing events
-import 'database_helper.dart'; // Import DatabaseHelper
+import 'gift_list_screen.dart';
+import 'add_event_screen.dart';
+import 'database_helper.dart';
+import 'firestore_service.dart'; // Import FirestoreService
+
 
 class EventListScreen extends StatefulWidget {
-  final bool isUserEvents; // Flag to check if events belong to the user
+  final bool isUserEvents;
 
   EventListScreen({this.isUserEvents = true});
 
@@ -13,7 +15,8 @@ class EventListScreen extends StatefulWidget {
 }
 
 class _EventListScreenState extends State<EventListScreen> {
-  final DatabaseHelper _databaseHelper = DatabaseHelper(); // Instance of DatabaseHelper
+  final DatabaseHelper _databaseHelper = DatabaseHelper();
+  final FirestoreService _firestoreService = FirestoreService(); // Add Firestore Service
   List<Map<String, dynamic>> _events = [];
   bool _isLoading = true;
   String _sortBy = 'Name';
@@ -21,7 +24,7 @@ class _EventListScreenState extends State<EventListScreen> {
   @override
   void initState() {
     super.initState();
-    _loadEvents(); // Load events from database on initialization
+    _loadEvents();
   }
 
   Future<void> _loadEvents() async {
@@ -29,12 +32,12 @@ class _EventListScreenState extends State<EventListScreen> {
 
     try {
       final events = widget.isUserEvents
-          ? await _databaseHelper.getUserEvents() // Load user's events
-          : await _databaseHelper.getFriendsEvents(); // Load friend's events
+          ? await _databaseHelper.getUserEvents()
+          : await _databaseHelper.getFriendsEvents();
 
       setState(() {
         _events = events;
-        _sortEvents(); // Sort events based on selected sorting
+        _sortEvents();
         _isLoading = false;
       });
     } catch (e) {
@@ -104,18 +107,7 @@ class _EventListScreenState extends State<EventListScreen> {
                   PopupMenuItem(value: 'delete', child: Text('Delete')),
                 ],
               )
-                  : null, // No actions for friend's events
-              // onTap: () {
-              //   Navigator.push(
-              //     context,
-              //     MaterialPageRoute(
-              //       builder: (context) => GiftListScreen(
-              //         friendName: event['name'],
-              //         isFriendGiftList: !widget.isUserEvents,
-              //       ),
-              //     ),
-              //   );
-              // },
+                  : null,
               onTap: () {
                 Navigator.push(
                   context,
@@ -123,12 +115,11 @@ class _EventListScreenState extends State<EventListScreen> {
                     builder: (context) => GiftListScreen(
                       friendName: event['name'],
                       isFriendGiftList: !widget.isUserEvents,
-                      eventId: event['_id'], // Pass the event ID
+                      eventId: event['_id'],
                     ),
                   ),
                 );
               },
-
             ),
           );
         },
@@ -140,7 +131,7 @@ class _EventListScreenState extends State<EventListScreen> {
         icon: Icon(Icons.add),
         label: Text('Add Event'),
       )
-          : null, // Hide add button for friend's events
+          : null,
     );
   }
 
@@ -151,7 +142,6 @@ class _EventListScreenState extends State<EventListScreen> {
     );
 
     if (newEvent != null) {
-      // Ensure all required fields are present
       final requiredFields = ['name', 'category', 'date', 'status'];
       for (var field in requiredFields) {
         if (!newEvent.containsKey(field) || newEvent[field] == null) {
@@ -162,13 +152,9 @@ class _EventListScreenState extends State<EventListScreen> {
           return;
         }
       }
-
-      // Convert DateTime to string if needed
       if (newEvent['date'] is DateTime) {
         newEvent['date'] = (newEvent['date'] as DateTime).toIso8601String();
       }
-
-      // Add optional fields with null if not provided
       final eventToInsert = {
         'name': newEvent['name'],
         'category': newEvent['category'],
@@ -178,12 +164,11 @@ class _EventListScreenState extends State<EventListScreen> {
         'location': newEvent['location'] ?? '',
         'description': newEvent['description'] ?? '',
       };
-
       print('Attempting to insert event: $eventToInsert');
 
       try {
-        await _databaseHelper.insertEvent(eventToInsert);
-        _loadEvents(); // Reload events
+        await _firestoreService.insertEvent(eventToInsert); // Use the Firestore service
+        _loadEvents();
       } catch (e) {
         print('Error inserting event: $e');
         ScaffoldMessenger.of(context).showSnackBar(
@@ -195,9 +180,7 @@ class _EventListScreenState extends State<EventListScreen> {
 
 
 
-
   void _editEvent(Map<String, dynamic> event) async {
-    // Navigate to the AddEventScreen with the current event details
     final updatedEvent = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -205,10 +188,17 @@ class _EventListScreenState extends State<EventListScreen> {
       ),
     );
 
-    // If the user saved changes, refresh the events list
     if (updatedEvent != null) {
-      await DatabaseHelper().updateEvent(updatedEvent);
-      _loadEvents(); // Reload events from the database
+      try{
+        await _firestoreService.updateEvent(updatedEvent);
+        _loadEvents();
+      } catch (e){
+        print('Error updating event: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update event: ${e.toString()}')),
+        );
+      }
+
     }
   }
 
@@ -216,17 +206,24 @@ class _EventListScreenState extends State<EventListScreen> {
 
 
   void _deleteEvent(int index) async {
-    await _databaseHelper.deleteEvent(_events[index]['id']); // Delete event from database
-    _loadEvents(); // Reload events
+    try{
+      await _firestoreService.deleteEvent(_events[index]['_id']); // Delete event from Firestore
+      _loadEvents();
+    } catch(e){
+      print('Error deleting event: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete event: ${e.toString()}')),
+      );
+    }
   }
 
   void _handleEventAction(String action, int index) {
-    final event = _events[index]; // Fetch the event object using the index
+    final event = _events[index];
 
     if (action == 'edit') {
-      _editEvent(event); // Pass the event object
+      _editEvent(event);
     } else if (action == 'delete') {
-      _deleteEvent(index); // Keep passing the index for deletion
+      _deleteEvent(index);
     }
   }
 

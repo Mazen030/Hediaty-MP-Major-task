@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'database_helper.dart';
+import 'firestore_service.dart'; // Import FirestoreService
 
 class AddGiftScreen extends StatefulWidget {
   final Map<String, dynamic>? gift;
@@ -17,8 +18,10 @@ class _AddGiftScreenState extends State<AddGiftScreen> {
   late TextEditingController _descriptionController;
   late TextEditingController _categoryController;
   late TextEditingController _priceController;
-
+  final FirestoreService _firestoreService = FirestoreService(); // Add Firestore Service
   final DatabaseHelper _databaseHelper = DatabaseHelper();
+
+
 
   @override
   void initState() {
@@ -136,15 +139,15 @@ class _AddGiftScreenState extends State<AddGiftScreen> {
         print('Warning: No event ID when saving gift');
       }
 
+
       try {
-        int result;
         if (!_isEditMode()) {
-          result = await _databaseHelper.insertGift(giftData);
-          print('Gift inserted with ID: $result');
+          await _firestoreService.insertGift(giftData);
+          print('Gift inserted with eventId: ${widget.eventId}');
         } else {
           giftData['_id'] = widget.gift!['_id'];
-          result = await _databaseHelper.updateGift(giftData);
-          print('Gift updated: $result');
+          await _firestoreService.updateGift(giftData);
+          print('Gift updated: $giftData');
         }
 
         Navigator.pop(context, giftData);

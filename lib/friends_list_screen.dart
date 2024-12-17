@@ -166,28 +166,18 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
                   style: TextStyle(color: Colors.grey[600]),
                 ),
               onTap: () {
+                print("Friend email: ${friend['email']}");
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (context) => GiftListScreen(
-                      friendName: friend['name'] ?? 'Friend',
+                      friendName: friend['email'] ?? 'Friend',
                       isFriendGiftList: true,
                     ),
                   ),
                 );
               },
-              // onTap: () {
-              //   Navigator.push(
-              //     context,
-              //     MaterialPageRoute(
-              //       builder: (context) => GiftListScreen(
-              //         friendName: friend['name'] ?? 'Friend',
-              //         isFriendGiftList: true,
-              //         eventId: friend['eventId'] ?? 0, // Replace with actual logic for eventId
-              //       ),
-              //     ),
-              //   );
-              // },
+
             ),
           );
         },

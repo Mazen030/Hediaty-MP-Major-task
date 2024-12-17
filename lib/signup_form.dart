@@ -197,6 +197,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'database_helper.dart';
+import 'firestore_service.dart'; // Import FirestoreService
 
 class SignupScreen extends StatefulWidget {
   @override
@@ -208,22 +209,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
   final DatabaseHelper _dbHelper = DatabaseHelper();
-  // Future<void> _signup() async {
-  //   try {
-  //     await FirebaseAuth.instance.createUserWithEmailAndPassword(
-  //       email: _emailController.text.trim(),
-  //       password: _passwordController.text.trim(),
-  //     );
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text('Signup successful!')),
-  //     );
-  //     Navigator.pop(context);
-  //   } catch (e) {
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text('Error: ${e.toString()}')),
-  //     );
-  //   }
-  // }
+  final FirestoreService _firestoreService = FirestoreService();
 
   Future<void> _signup() async {
     try {
@@ -232,17 +218,18 @@ class _SignupScreenState extends State<SignupScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
+      final firebaseUser = userCredential.user;
 
       // Prepare user data for local database
       Map<String, dynamic> newUser = {
-        'username': _usernameController.text.trim(), // Assuming you have a username controller
+        'username': _usernameController.text.trim(),
         'email': _emailController.text.trim(),
-        'password': '', // Firebase handles authentication, so no local password storage
-        'preferences': '' // Optional: add any initial preferences
+        'password': '',
       };
 
       // Insert user into local database
       await _dbHelper.insertUser(newUser);
+      await _firestoreService.syncFirebaseUser(firebaseUser);
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Signup successful!')),
@@ -272,11 +259,18 @@ class _SignupScreenState extends State<SignupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Sign Up')),
+      appBar: AppBar(
+        title: Text('Sign Up'),
+        automaticallyImplyLeading: false, // Remove back arrow
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
+            TextField(
+              controller: _usernameController,
+              decoration: InputDecoration(labelText: 'Username'),
+            ),
             TextField(
               controller: _emailController,
               decoration: InputDecoration(labelText: 'Email'),
@@ -297,4 +291,3 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 }
-
