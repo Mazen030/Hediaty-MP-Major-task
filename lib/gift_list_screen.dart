@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 import 'database_helper.dart';
 import 'add_gift_screen.dart';
-import 'firestore_service.dart'; // Import FirestoreService
+import 'firestore_service.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // Add this import
+import 'My Pledged Gifts Page.dart'; // Import the pledged gift screen
 
 class GiftListScreen extends StatefulWidget {
   final String friendName;
   final bool isFriendGiftList;
   final int? eventId;
+  final String? eventFirestoreId;
 
   GiftListScreen({
     required this.friendName,
     this.isFriendGiftList = false,
     this.eventId,
+    this.eventFirestoreId,
   });
 
   @override
@@ -21,8 +25,12 @@ class GiftListScreen extends StatefulWidget {
 class _GiftListScreenState extends State<GiftListScreen> {
   List<Map<String, dynamic>> _gifts = [];
   String _sortBy = 'Name';
+  bool _isLoading = true;
   final DatabaseHelper _databaseHelper = DatabaseHelper();
-  final FirestoreService _firestoreService = FirestoreService(); // Add Firestore Service
+  final FirestoreService _firestoreService = FirestoreService();
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  String get _currentUserEmail => _auth.currentUser?.email ?? '';
 
   @override
   void initState() {
@@ -37,56 +45,62 @@ class _GiftListScreenState extends State<GiftListScreen> {
   }
 
   Future<void> _loadGifts() async {
-    if (widget.isFriendGiftList) {
-      if (widget.friendName == null) {
-        print("Friend name is null");
-        return;
-      }
+    if (_currentUserEmail.isEmpty) {
+      print('No user is currently logged in');
+      return;
+    }
 
-      // Fetch gifts from firestore using friend's email
-      final friend = await _databaseHelper.getUserByEmail(widget.friendName);
-      if(friend != null){
-        final gifts = await _firestoreService.getFriendGifts(friend['email'] as String);
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      if (widget.isFriendGiftList) {
+        if (widget.eventFirestoreId == null) {
+          print("Event ID is null");
+          return;
+        }
+
+        final gifts = await _firestoreService.getFriendGifts(
+          widget.friendName,
+          widget.eventFirestoreId!,
+        );
+
+        // For each gift, check if the current user has pledged it
+        for (var gift in gifts) {
+          final pledgeData = await _firestoreService.getPledge(
+            friendEmail: widget.friendName,
+            giftName: gift['name'],
+            currentUserEmail: _currentUserEmail,
+            eventId: widget.eventFirestoreId,
+          );
+          gift['pledged'] = pledgeData.isNotEmpty ? 1 : 0;
+        }
+
         if (mounted) {
           setState(() {
             _gifts = gifts;
             _sortGifts();
+            _isLoading = false;
+          });
+        }
+      } else if (widget.eventId != null) {
+        final gifts = await _databaseHelper.getGiftsForEvent(widget.eventId!);
+        if (mounted) {
+          setState(() {
+            _gifts = gifts;
+            _sortGifts();
+            _isLoading = false;
           });
         }
       }
-      else{
-        print("Friend not found in local database");
-      }
-    }
-    // If it's not a friend's gift list, load gifts from the local database
-    else if (widget.eventId != null) {
-      final gifts = await _databaseHelper.getGiftsForEvent(widget.eventId!);
-      if (mounted) {
-        setState(() {
-          _gifts = gifts;
-          _sortGifts();
-        });
-      }
+    } catch (e) {
+      print('Error loading gifts: $e');
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
-
-
-  Future<Map<String, dynamic>?> _getGiftByFirestoreId(String firestoreId) async {
-    final db = await _databaseHelper.database;
-    final gifts = await db.query(
-        DatabaseHelper.tableGifts,
-        where: 'firestoreId = ?',
-        whereArgs: [firestoreId]
-    );
-
-    if (gifts.isEmpty) {
-      print('No gift found with Firestore ID: $firestoreId');
-      return null;
-    }
-
-    return gifts.first; // Return the first (and should be only) gift found
-  }
-
 
   @override
   Widget build(BuildContext context) {
@@ -108,9 +122,15 @@ class _GiftListScreenState extends State<GiftListScreen> {
               PopupMenuItem(value: 'Pledged', child: Text('Sort by Pledged Status')),
             ],
           ),
+          if (widget.isFriendGiftList)
+            IconButton(
+                onPressed: () => _viewPledgedGifts(),
+                icon: Icon(Icons.card_giftcard)),
         ],
       ),
-      body: Column(
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator())
+          : Column(
         children: [
           if (!widget.isFriendGiftList)
             Padding(
@@ -141,10 +161,10 @@ class _GiftListScreenState extends State<GiftListScreen> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (widget.isFriendGiftList) // Conditionally show the pledge button
+                        if (widget.isFriendGiftList)
                           _buildPledgeButton(gift, index)
                         else
-                          Row( // Show edit and delete if not a friend's list
+                          Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
@@ -170,20 +190,139 @@ class _GiftListScreenState extends State<GiftListScreen> {
   }
 
   Widget _buildPledgeButton(Map<String, dynamic> gift, int index) {
+    bool isPledged = gift['pledged'] == 1;
     return TextButton(
-      onPressed: () => _togglePledgeGift(index),
+      onPressed: () => _togglePledgeGift(gift, index),
       style: TextButton.styleFrom(
-        backgroundColor: (gift['pledged'] == 1) ? Colors.white : Color(0xFF6A1B9A),
+        backgroundColor: isPledged ? Colors.white : Color(0xFF6A1B9A),
       ),
       child: Text(
-        (gift['pledged'] == 1) ? 'Pledged' : 'Pledge',
+        isPledged ? 'Pledged' : 'Pledge',
         style: TextStyle(
-          color: (gift['pledged'] == 1) ? Colors.green : Colors.white,
+          color: isPledged ? Colors.green : Colors.white,
           fontWeight: FontWeight.bold,
         ),
       ),
     );
   }
+
+  void _togglePledgeGift(Map<String, dynamic> gift, int index) async {
+    if (_currentUserEmail.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please log in to pledge gifts')),
+      );
+      return;
+    }
+
+    final isPledged = gift['pledged'] == 1;
+
+    try {
+      final firestoreId = gift['id']; // Firestore document ID
+      if (firestoreId == null || firestoreId.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update pledge: Invalid gift ID')),
+        );
+        return;
+      }
+
+      if (!isPledged) {
+        // Check if anyone has already pledged this gift
+        final existingPledges = await _firestoreService.getAllPledgesForGift(
+          friendEmail: widget.friendName,
+          giftName: gift['name'],
+          eventId: widget.eventFirestoreId,
+        );
+
+        if (existingPledges.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('This gift has already been pledged by someone')),
+          );
+          return;
+        }
+        // Get current date time
+        DateTime now = DateTime.now();
+        // Create a new pledge
+        await _firestoreService.createPledge(
+          pledgeData: {
+            'giftName': gift['name'],
+            'pledged': 1,
+            'pledgeDate': now.toString(),
+            'status': 'pending',
+            'eventId': widget.eventFirestoreId,
+            'giftId': firestoreId,
+            'category': gift['category'],
+          },
+          friendEmail: widget.friendName,
+          currentUserEmail: _currentUserEmail,
+        );
+        await _databaseHelper.createPledgedGift(
+          giftId: firestoreId,
+          giftName: gift['name'],
+          friendName: widget.friendName,
+          dueDate: now,
+          giftStatus: 'pending',
+        );
+
+
+
+        // Update the pledge status in the gifts collection
+        await _firestoreService.updateGiftPledgeStatus(firestoreId, 1);
+      } else {
+        // Get and remove existing pledge
+        final pledgeData = await _firestoreService.getPledge(
+          friendEmail: widget.friendName,
+          giftName: gift['name'],
+          currentUserEmail: _currentUserEmail,
+          eventId: widget.eventFirestoreId,
+        );
+
+        if (pledgeData.isNotEmpty) {
+          await _firestoreService.removePledge(
+            pledgeId: pledgeData.first['id'],
+            currentUserEmail: _currentUserEmail,
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to unpledge: pledge not found.')),
+          );
+          return;
+        }
+
+        await _databaseHelper.removePledgedGift(firestoreId);
+        // Update the pledge status in the gifts collection
+        await _firestoreService.updateGiftPledgeStatus(firestoreId, 0);
+      }
+
+      // Update gift's pledged status locally
+      setState(() {
+        _gifts[index]['pledged'] = isPledged ? 0 : 1;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isPledged
+                ? 'You have unpledged "${gift['name']}"'
+                : 'You pledged to give "${gift['name']}"',
+          ),
+        ),
+      );
+    } catch (e) {
+      print('Error toggling pledge: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update pledge: $e')),
+      );
+    }
+  }
+  void _viewPledgedGifts() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MyPledgedGiftsScreen(),
+      ),
+    );
+  }
+
 
   void _addGift() async {
     if (widget.eventId == null) {
@@ -201,7 +340,6 @@ class _GiftListScreenState extends State<GiftListScreen> {
     );
 
     if (newGift != null) {
-      print('New gift added: $newGift');
       await _loadGifts();
     }
   }
@@ -226,7 +364,7 @@ class _GiftListScreenState extends State<GiftListScreen> {
 
     try {
       await _firestoreService.deleteGift(gift['_id']);
-      _loadGifts();
+      await _loadGifts();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Gift deleted successfully')),
       );
@@ -237,119 +375,7 @@ class _GiftListScreenState extends State<GiftListScreen> {
     }
   }
 
-  // void _togglePledgeGift(int index) async {
-  //   final gift = _gifts[index];
-  //   final isPledged = gift['pledged'] == 1 || gift['pledged'] == '1';
-  //
-  //   try {
-  //     final firestoreId = gift['_id']?.toString();
-  //     if (firestoreId == null || firestoreId.isEmpty) {
-  //       ScaffoldMessenger.of(context).showSnackBar(
-  //         SnackBar(content: Text('Failed to update pledge: Invalid gift ID')),
-  //       );
-  //       return;
-  //     }
-  //
-  //     final localGift = await _getGiftByFirestoreId(firestoreId);
-  //     if(localGift == null){
-  //       ScaffoldMessenger.of(context).showSnackBar(
-  //         SnackBar(content: Text('Failed to update pledge: Invalid local gift ID')),
-  //       );
-  //       return;
-  //     }
-  //     final giftId = localGift['_id'] as int;
-  //     await _databaseHelper.pledgeGift(giftId);
-  //
-  //     // Update Firestore with new pledge status
-  //     await _firestoreService.updateGift(
-  //         {...gift, 'pledged': isPledged ? 0 : 1}
-  //     );
-  //
-  //     _loadGifts();
-  //
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(
-  //         content: Text(
-  //           isPledged
-  //               ? 'You have unpledged "${gift['name']}"'
-  //               : 'You pledged to give "${gift['name']}"',
-  //         ),
-  //       ),
-  //     );
-  //
-  //   } catch (e) {
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text('Failed to update pledge: $e')),
-  //     );
-  //   }
-  // }
-
-  void _togglePledgeGift(int index) async {
-    final gift = _gifts[index];
-    final isPledged = gift['pledged'] == 1 || gift['pledged'] == '1';
-
-    try {
-      final firestoreId = gift['_id']?.toString();
-      if (firestoreId == null || firestoreId.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update pledge: Invalid gift ID')),
-        );
-        return;
-      }
-
-      final localGift = await _getGiftByFirestoreId(firestoreId);
-      if(localGift == null){
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update pledge: Gift not found in local database')),
-        );
-        return;
-      }
-
-      final giftId = localGift['_id'] as int;
-
-      if (!isPledged) {
-        // Create a pledged gift record
-        await _databaseHelper.createPledgedGift(
-            giftId: giftId,
-            giftName: gift['name'],
-            friendName: widget.friendName, // Use the friend's name from the current screen
-            dueDate: DateTime.now().add(Duration(days: 30)), // Example: due in 30 days
-            giftStatus: 'pending'
-        );
-      } else {
-        // If already pledged, remove the pledged gift record
-        await _databaseHelper.unpledgeGift(giftId);
-      }
-
-      // Update the gift's pledged status
-      await _databaseHelper.pledgeGift(giftId);
-
-      // Update Firestore with new pledge status
-      await _firestoreService.updateGift(
-          {...gift, 'pledged': isPledged ? 0 : 1}
-      );
-
-      _loadGifts();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isPledged
-                ? 'You have unpledged "${gift['name']}"'
-                : 'You pledged to give "${gift['name']}"',
-          ),
-        ),
-      );
-
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to update pledge: $e')),
-      );
-    }
-  }
-
   void _sortGifts() {
-    // Create a mutable copy of the list before sorting
     List<Map<String, dynamic>> sortableGifts = List.from(_gifts);
 
     if (_sortBy == 'Name') {
@@ -360,7 +386,6 @@ class _GiftListScreenState extends State<GiftListScreen> {
       sortableGifts.sort((a, b) => (b['pledged'] ?? 0).compareTo(a['pledged'] ?? 0));
     }
 
-    // Update the original _gifts list with the sorted list
     _gifts = sortableGifts;
   }
 }

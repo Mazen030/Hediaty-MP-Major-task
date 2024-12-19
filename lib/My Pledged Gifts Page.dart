@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'database_helper.dart'; // Import your DatabaseHelper
-
+import 'database_helper.dart';
+import 'firestore_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 // PledgedGift Model
 class PledgedGift {
-  final int giftId;
+  final String giftId;
   final String giftName;
   final String friendName;
   final DateTime dueDate;
@@ -21,7 +22,7 @@ class PledgedGift {
 
   factory PledgedGift.fromMap(Map<String, dynamic> map) {
     return PledgedGift(
-      giftId: map['gift_id'],
+      giftId: map['gift_id'].toString(),
       giftName: map['gift_name'],
       friendName: map['friend_name'],
       dueDate: DateTime.parse(map['due_date']),
@@ -37,6 +38,7 @@ class MyPledgedGiftsScreen extends StatefulWidget {
 
 class _MyPledgedGiftsScreenState extends State<MyPledgedGiftsScreen> {
   final dbHelper = DatabaseHelper();
+  final firestoreService = FirestoreService();
   List<PledgedGift> _pledgedGifts = [];
   bool _isLoading = true;
   String _sortBy = 'Name';
@@ -50,17 +52,22 @@ class _MyPledgedGiftsScreenState extends State<MyPledgedGiftsScreen> {
   Future<void> _loadPledgedGifts() async {
     setState(() => _isLoading = true);
     try {
-      final List<Map<String, dynamic>> fetchedGifts = await dbHelper.getPledgedGifts();
+      final currentUserEmail = FirebaseAuth.instance.currentUser?.email;
+      if (currentUserEmail == null) {
+        throw Exception("No user is logged in");
+      }
+      final List<Map<String, dynamic>> localGifts = await dbHelper.getPledgedGifts();
       setState(() {
-        _pledgedGifts = fetchedGifts
-            .map((map) => PledgedGift.fromMap(map))
-            .toList();
+        _pledgedGifts = localGifts.map((map) => PledgedGift.fromMap(map)).toList();
         _sortGifts();
         _isLoading = false;
       });
     } catch (e) {
       print('Error loading pledged gifts: $e');
       setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading pledged gifts: $e')),
+      );
     }
   }
 
@@ -68,10 +75,22 @@ class _MyPledgedGiftsScreenState extends State<MyPledgedGiftsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("My Pledged Gifts"),
-        backgroundColor: Color(0xFF6A1B9A),
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF6A1B9A), Color(0xFF4A148C)], // Gradient colors
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
+        title: Text(
+          "My Pledged Gifts",
+          style: TextStyle(color: Colors.white),
+        ),
         actions: [
           PopupMenuButton<String>(
+            icon: Icon(Icons.sort, color: Colors.white),
             onSelected: (value) {
               setState(() {
                 _sortBy = value;
@@ -90,77 +109,144 @@ class _MyPledgedGiftsScreenState extends State<MyPledgedGiftsScreen> {
           ? Center(child: CircularProgressIndicator())
           : _pledgedGifts.isEmpty
           ? Center(
-          child: Text(
-            "No pledged gifts yet!",
-            style: TextStyle(fontSize: 18, color: Colors.grey),
-          ))
+        child: Text(
+          "No pledged gifts yet!",
+          style: TextStyle(fontSize: 18, color: Colors.grey),
+        ),
+      )
           : ListView.builder(
         itemCount: _pledgedGifts.length,
         itemBuilder: (context, index) {
           final gift = _pledgedGifts[index];
-          return Card(
-            margin: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: ListTile(
-              title: Text(
-                gift.giftName,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18.0,
-                ),
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Pledged to: ${gift.friendName}'),
-                  Text(
-                      'Due Date: ${DateFormat.yMMMMd().format(gift.dueDate)}'),
-                ],
-              ),
-              trailing: gift.giftStatus == 'pending'
-                  ? ElevatedButton(
-                onPressed: () {
-                  _showModifyOptions(context, gift);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange,
-                ),
-                child: Text(
-                  'Modify',
-                  style: TextStyle(color: Colors.white),
-                ),
-              )
-                  : Icon(Icons.check_circle,
-                  color: Colors.green, size: 30.0),
-            ),
-          );
+          return _buildGiftCard(gift, index);
         },
       ),
     );
   }
 
+
+  Widget _buildGiftCard(PledgedGift gift, int index) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.0, end: 1.0).animate(
+        CurvedAnimation(
+          parent: ModalRoute.of(context)!.animation!,
+          curve: Curves.easeIn,
+        ),
+      ),
+      child: Card(
+        elevation: 4.0,
+        margin: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12.0),
+        ),
+        child: ListTile(
+            contentPadding: EdgeInsets.all(16.0),
+            title: Text(
+              gift.giftName,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 18.0,
+                color: Color(0xFF4A148C),
+              ),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Pledged to: ${gift.friendName}', style: TextStyle(color: Colors.grey[600],)),
+                SizedBox(height: 4.0),
+                Text(
+                  'Due Date: ${DateFormat.yMMMMd().format(gift.dueDate)}',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+              ],
+            ),
+            trailing: gift.giftStatus == 'pending'
+                ? ElevatedButton(
+              onPressed: () {
+                _showModifyOptions(context, gift);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+              ),
+              child: Text('Modify', style: TextStyle(color: Colors.white),),
+            )
+                : Icon(
+              Icons.check_circle,
+              color: Colors.green,
+              size: 30.0,
+            )
+        ),
+      ),
+    );
+  }
+
+
   void _showModifyOptions(BuildContext context, PledgedGift gift) {
-    showModalBottomSheet(
+    showGeneralDialog(
       context: context,
-      builder: (context) {
+      transitionDuration: Duration(milliseconds: 300),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 1),
+            end: Offset.zero,
+          ).animate(animation),
+          child: child,
+        );
+      },
+      pageBuilder: (context, animation, secondaryAnimation) {
         return Container(
           child: Wrap(
             children: [
               ListTile(
-                leading: Icon(Icons.check),
+                leading: Icon(Icons.check, color: Colors.green),
                 title: Text('Mark as Fulfilled'),
                 onTap: () async {
-                  await dbHelper.fulfillGift(gift.giftId);
-                  Navigator.pop(context);
-                  _loadPledgedGifts();
+                  try {
+                    await dbHelper.updatePledgedGiftStatus(gift.giftId, 'fulfilled');
+                    // Implement Firebase Update logic here
+                    Navigator.pop(context);
+                    _loadPledgedGifts();
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to update gift: $e')),
+                    );
+                  }
                 },
               ),
               ListTile(
-                leading: Icon(Icons.delete),
+                leading: Icon(Icons.delete, color: Colors.red),
                 title: Text('Cancel Pledge'),
                 onTap: () async {
-                  await dbHelper.unpledgeGift(gift.giftId);
-                  Navigator.pop(context);
-                  _loadPledgedGifts();
+                  try {
+                    // Get user email for the friend
+                    final friend = await dbHelper.getUserByEmail(gift.friendName);
+                    if (friend == null) {
+                      throw Exception('Friend not found');
+                    }
+
+                    // Remove pledge from Firestore
+                    final pledgeData = await firestoreService.getPledge(
+                      friendEmail: gift.friendName,
+                      giftName: gift.giftName,
+                      currentUserEmail: FirebaseAuth.instance.currentUser?.email ?? '',
+                      eventId: '',
+                    );
+                    if(pledgeData.isNotEmpty){
+                      await firestoreService.removePledge(
+                        pledgeId: pledgeData.first['id'],
+                        currentUserEmail: FirebaseAuth.instance.currentUser?.email ?? '',
+                      );
+                    }
+
+                    await dbHelper.removePledgedGift(gift.giftId);
+                    Navigator.pop(context);
+                    _loadPledgedGifts();
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to cancel pledge: $e')),
+                    );
+                  }
                 },
               ),
             ],
@@ -169,6 +255,7 @@ class _MyPledgedGiftsScreenState extends State<MyPledgedGiftsScreen> {
       },
     );
   }
+
   void _sortGifts() {
     if (_sortBy == 'Name') {
       _pledgedGifts.sort((a, b) => a.giftName.compareTo(b.giftName));

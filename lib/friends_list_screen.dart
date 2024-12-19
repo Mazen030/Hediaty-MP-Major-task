@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'database_helper.dart';
-import 'gift_list_screen.dart';
-import 'create_event_list_screen.dart';
-import 'event_listpage.dart';
+import 'friend_events_screen.dart'; // Import the new screen
+import 'firestore_service.dart';
 import 'profile.dart';
 
 class FriendsListScreen extends StatefulWidget {
@@ -14,6 +13,7 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
   final DatabaseHelper _databaseHelper = DatabaseHelper();
   List<Map<String, dynamic>> _friends = [];
   bool _isLoading = true;
+  final FirestoreService _firestoreService = FirestoreService();
 
   @override
   void initState() {
@@ -27,8 +27,8 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
     });
 
     try {
-      // Fetch friends from the database
-      final friends = await _databaseHelper.getFriendsList();
+      // Fetch friends from firestore
+      final friends = await _firestoreService.getFriendsList();
 
       setState(() {
         _friends = friends;
@@ -46,9 +46,6 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
   }
 
   Future<void> _addFriend() async {
-    // First, debug the database to check current state
-    await _databaseHelper.debugDatabase();
-
     final emailController = TextEditingController();
 
     showDialog(
@@ -74,18 +71,26 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
                 String email = emailController.text.trim();
                 if (email.isNotEmpty) {
                   try {
-                    // Use addFriend method to add a friend by email
-                    await _databaseHelper.addFriend(email);
+                    // Check if the user exists in Firestore first
+                    bool userExists = await _firestoreService.checkUserExists(email);
+                    if (!userExists) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('User with this email not found.')),
+                      );
+                      return; // Exit if the user doesn't exist
+                    }
+                    // Use FirestoreService to add friend, this will throw error if the friend is already added
+                    await FirestoreService().addFriend(email);
                     await _loadFriends(); // Refresh list
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Friend added successfully!')),
                     );
+                    Navigator.pop(context);
                   } catch (e) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Error: ${e.toString()}')),
                     );
                   }
-                  Navigator.pop(context);
                 }
               },
               child: Text('Add'),
@@ -99,89 +104,85 @@ class _FriendsListScreenState extends State<FriendsListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+        appBar: AppBar(
         title: Text(
-          'Friends',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF6A1B9A), Color(0xFFAB47BC)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.account_circle),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => ProfileScreen()),
-              );
-            },
-          ),
-          IconButton(
-            icon: Icon(Icons.search),
-            onPressed: () {
-              showSearch(
-                context: context,
-                delegate: FriendSearchDelegate(_friends),
-              );
-            },
-          ),
-        ],
+        'Friends',
+        style: TextStyle(fontWeight: FontWeight.bold),
+    ),
+    flexibleSpace: Container(
+    decoration: BoxDecoration(
+    gradient: LinearGradient(
+    colors: [Color(0xFF6A1B9A), Color(0xFFAB47BC)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    ),
+    ),
+    ),
+    actions: [
+    IconButton(
+    icon: Icon(Icons.account_circle),
+    onPressed: () {
+    Navigator.push(
+    context,
+    MaterialPageRoute(builder: (context) => ProfileScreen()),
+    );
+    },
+    ),
+    IconButton(
+    icon: Icon(Icons.search),
+    onPressed: () {
+    showSearch(
+    context: context,
+    delegate: FriendSearchDelegate(_friends),
+    );
+    },
+    ),
+    ],
+    ),
+    body: _isLoading
+    ? Center(child: CircularProgressIndicator())
+        : _friends.isEmpty
+    ? _buildEmptyState()
+        : ListView.builder(
+    itemCount: _friends.length,
+    padding: const EdgeInsets.all(16.0),
+    itemBuilder: (context, index) {
+    final friend = _friends[index];
+    return Card(
+    margin: const EdgeInsets.only(bottom: 12),
+    shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(12),
+    ),
+    elevation: 4,
+    child: ListTile(
+    contentPadding: EdgeInsets.all(16),
+      leading: CircleAvatar(
+        radius: 28,
+        child: Icon(Icons.person, size: 28),
       ),
-      body: _isLoading
-          ? Center(child: CircularProgressIndicator())
-          : _friends.isEmpty
-          ? _buildEmptyState()
-          : ListView.builder(
-        itemCount: _friends.length,
-        padding: const EdgeInsets.all(16.0),
-        itemBuilder: (context, index) {
-          final friend = _friends[index];
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            elevation: 4,
-            child: ListTile(
-              contentPadding: EdgeInsets.all(16),
-              leading: CircleAvatar(
-                radius: 28,
-                child: Icon(Icons.person, size: 28),
-              ),
-              title: Text(
-                friend['name'] ?? 'Unknown Friend',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-              ),
-                subtitle: Text(
-                  (friend['upcomingEvents'] ?? 0) > 0
-                      ? 'Upcoming Events: ${friend['upcomingEvents']}'
-                      : 'No Upcoming Events',
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
-              onTap: () {
-                print("Friend email: ${friend['email']}");
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => GiftListScreen(
-                      friendName: friend['email'] ?? 'Friend',
-                      isFriendGiftList: true,
-                    ),
-                  ),
-                );
-              },
-
-            ),
-          );
-        },
+      title: Text(
+        friend['username'] ?? 'Unknown Friend',
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
       ),
+      subtitle: Text(
+        friend['email'] ?? 'No Email' ,
+        style: TextStyle(color: Colors.grey[600]),
+      ),
+      onTap: () {
+        print("Friend email: ${friend['email']}");
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => FriendEventsScreen(
+              friendEmail: friend['email'],
+            ),
+          ),
+        );
+      },
+    ),
+    );
+    },
+    ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addFriend,
         backgroundColor: Color(0xFF6A1B9A),
@@ -234,7 +235,7 @@ class FriendSearchDelegate extends SearchDelegate {
   Widget buildResults(BuildContext context) {
     final results = friends
         .where((friend) =>
-    friend['name'].toLowerCase().contains(query.toLowerCase()) ||
+    friend['username'].toLowerCase().contains(query.toLowerCase()) ||
         friend['email'].toLowerCase().contains(query.toLowerCase()))
         .toList();
 
@@ -243,15 +244,13 @@ class FriendSearchDelegate extends SearchDelegate {
       itemBuilder: (context, index) {
         final friend = results[index];
         return ListTile(
-          title: Text(friend['name'] ?? 'Unknown'),
+          title: Text(friend['username'] ?? 'Unknown'),
           subtitle: Text(
             friend['email'] ?? '',
             style: TextStyle(color: Colors.grey[600]),
           ),
           trailing: Text(
-            friend['upcomingEvents'] > 0
-                ? 'Upcoming Events: ${friend['upcomingEvents']}'
-                : 'No Upcoming Events',
+            '',
             style: TextStyle(color: Colors.grey[500]),
           ),
         );

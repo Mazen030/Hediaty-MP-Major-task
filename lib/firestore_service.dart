@@ -1,7 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart' as firebase_auth; // Import with alias
-import 'database_helper.dart'; // Import your local database helper
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'database_helper.dart';
 import 'package:uuid/uuid.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 // Classes used to store data locally
 class LocalUser {
@@ -106,6 +107,8 @@ class FirestoreService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
   // ------------------ Data Conversion Functions ------------------
+  String get _currentUserId => _auth.currentUser!.uid;
+
 
   Map<String, dynamic> _userToFirestore(LocalUser localUser) {
     return {
@@ -123,18 +126,30 @@ class FirestoreService {
       'location': localEvent.location,
       'description': localEvent.description,
       'status': localEvent.status,
-      'user_id': localEvent.user_id?.toString(), // Convert int user_id to String
+      'user_id': _currentUserId, // This should be the Firebase Auth UID
     };
   }
+  Future<String?> _getFirestoreEventId(int localEventId) async {
+    final db = await _dbHelper.database;
+    final result = await db.query(
+        DatabaseHelper.tableEvents,
+        columns: ['firestoreId'],
+        where: '_id = ?',
+        whereArgs: [localEventId]
+    );
 
-  Map<String, dynamic> _giftToFirestore(Gift localGift) {
+    return result.isNotEmpty ? result.first['firestoreId'] as String? : null;
+  }
+
+  Map<String, dynamic> _giftToFirestore(Gift localGift, String? firestoreEventId) {
     return {
       'name': localGift.name,
       'description': localGift.description,
       'category': localGift.category,
       'price': localGift.price,
       'status': localGift.status,
-      'event_id': localGift.event_id?.toString(), // Convert int event_id to String
+      'event_id': firestoreEventId, // Use Firestore event ID instead of local ID
+      'user_id': _currentUserId,  // Add the user ID for querying
       'pledged': localGift.pledged,
     };
   }
@@ -144,28 +159,69 @@ class FirestoreService {
   Future<void> syncFirebaseUser(firebase_auth.User? firebaseUser) async {
     if (firebaseUser != null) {
       try {
+        // First, sync to local database
         await _dbHelper.syncFirebaseUserToLocalDatabase(firebaseUser);
-        print("Synchronized user ${firebaseUser.email}");
+
+        // Check if user already exists in Firestore
+        final usersQuery = await _firestore
+            .collection('users')
+            .where('email', isEqualTo: firebaseUser.email)
+            .get();
+
+        if (usersQuery.docs.isEmpty) {
+          // If user doesn't exist in Firestore, add them
+          final userDocRef = await _firestore.collection('users').add({
+            'username': firebaseUser.displayName ?? firebaseUser.email?.split('@').first,
+            'email': firebaseUser.email,
+            'uid': firebaseUser.uid,  // Store the Firebase Auth UID
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+
+          print("Created user ${firebaseUser.email} in Firestore with ID: ${userDocRef.id}");
+        } else {
+          // Update existing user to ensure uid is stored
+          final docId = usersQuery.docs.first.id;
+          await _firestore.collection('users').doc(docId).update({
+            'uid': firebaseUser.uid,  // Ensure the uid is stored/updated
+          });
+          print("Updated user ${firebaseUser.email} with uid");
+        }
       } catch (e) {
         print('Error syncing user: $e');
+        rethrow;
       }
     }
   }
-  // Future<void> syncFirebaseUser(firebase_auth.User? firebaseUser) async {
-  //   if (firebaseUser != null) {
-  //     try {
-  //       final userRef = _firestore.collection('users').doc(firebaseUser.email);
-  //       final doc = await userRef.get();
-  //       if(!doc.exists){
-  //         await userRef.set({});
-  //       }
-  //       await _dbHelper.syncFirebaseUserToLocalDatabase(firebaseUser);
-  //       print("Synchronized user ${firebaseUser.email}");
-  //     } catch (e) {
-  //       print('Error syncing user: $e');
-  //     }
-  //   }
-  // }
+
+  Future<Map<String, dynamic>?> getUserData(String uid) async {
+    try{
+      DocumentSnapshot<Map<String, dynamic>> snapshot = await _firestore.collection('users').doc(uid).get();
+      if (snapshot.exists) {
+        return snapshot.data();
+      }
+      else {
+        return null;
+      }
+    } catch (e) {
+      print('Error fetching user: $e');
+      throw Exception('Failed to fetch user data. Please try again');
+    }
+  }
+
+
+  Future<bool> checkUserExists(String email) async {
+    try {
+      QuerySnapshot<Map<String, dynamic>> snapshot = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .get();
+      return snapshot.docs.isNotEmpty; // Return true if a document with the email is found
+    } catch (e) {
+      print('Error checking user existence: $e');
+      throw Exception('Failed to check user existence. Please try again');
+    }
+  }
+
 
 
   // ------------------ Initial Migration ------------------
@@ -281,20 +337,32 @@ class FirestoreService {
 // ------------------ Gift Methods ------------------
   Future<void> insertGift(Map<String, dynamic> gift) async {
     try {
-      final firestoreDocRef = await _firestore.collection('gifts').add(_giftToFirestore(Gift.fromMap(gift)));
-      final firestoreId = firestoreDocRef.id;
-      // Insert locally and get local id
+      // Get the Firestore event ID for this gift's event
+      final db = await _dbHelper.database;
+      final eventResult = await db.query(
+          DatabaseHelper.tableEvents,
+          columns: ['firestoreId'],
+          where: '_id = ?',
+          whereArgs: [gift['event_id']]
+      );
 
+      final firestoreEventId = eventResult.isNotEmpty ? eventResult.first['firestoreId'] as String? : null;
+
+      // Create Firestore document with the Firestore event ID
+      final firestoreDocRef = await _firestore
+          .collection('gifts')
+          .add(_giftToFirestore(Gift.fromMap(gift), firestoreEventId));
+
+      final firestoreId = firestoreDocRef.id;
+
+      // Insert locally and store the Firestore ID
       await _dbHelper.insertGift({...gift, 'firestoreId': firestoreId});
 
-
-      print('Inserted gift with Firestore ID: ${firestoreDocRef.id}');
-
+      print('Inserted gift with Firestore ID: $firestoreId for event: $firestoreEventId');
     } catch (e) {
       print('Error inserting gift to Firestore: $e');
     }
   }
-
 
   Future<void> updateGift(Map<String, dynamic> gift) async {
     try {
@@ -302,7 +370,6 @@ class FirestoreService {
 
       final giftResult = await db.query(
           DatabaseHelper.tableGifts,
-          columns: ['_id'],
           where: '_id = ?',
           whereArgs: [gift['_id']]
       );
@@ -311,33 +378,38 @@ class FirestoreService {
         print('No gift found with local ID: ${gift['_id']}');
         return;
       }
-      //get local gift id
-      final giftId = giftResult.first['_id'] as int;
 
-      final firestoreDocRef = await _firestore
-          .collection('gifts')
-          .where('event_id', isEqualTo: gift['event_id']?.toString() )
-          .get();
+      // Get the firestore id from the local db
+      final firestoreId = (await db.query(
+          DatabaseHelper.tableGifts,
+          columns: ['firestoreId'],
+          where: '_id = ?',
+          whereArgs: [gift['_id']]
+      )).first['firestoreId'] as String?;
 
-      if (firestoreDocRef.docs.isEmpty) {
-        print('No gift found in firestore with event ID: ${gift['event_id']}');
+      if(firestoreId == null){
+        print("No firestore ID found for local gift ID ${gift['_id']}");
         return;
       }
 
-      final firestoreDocId = firestoreDocRef.docs.first.id;
+      // Get the Firestore event ID for this gift's event
+      final eventResult = await db.query(
+          DatabaseHelper.tableEvents,
+          columns: ['firestoreId'],
+          where: '_id = ?',
+          whereArgs: [gift['event_id']]
+      );
 
+      final firestoreEventId = eventResult.isNotEmpty ? eventResult.first['firestoreId'] as String? : null;
 
       await _dbHelper.updateGift(gift); // Update locally first
 
       // Update in Firestore using the Firestore-specific document ID
-      if (firestoreDocId != null) {
-        await _firestore
-            .collection('gifts')
-            .doc(firestoreDocId)
-            .update(_giftToFirestore(Gift.fromMap(gift)));
-        print('Updated gift ${gift['_id']} in Firestore');
-      }
-
+      await _firestore
+          .collection('gifts')
+          .doc(firestoreId)
+          .update(_giftToFirestore(Gift.fromMap(gift), firestoreEventId));
+      print('Updated gift ${gift['_id']} in Firestore');
 
     } catch (e) {
       print('Error updating gift in Firestore: $e');
@@ -376,67 +448,120 @@ class FirestoreService {
   }
 
   // ------------------ Pledge Methods ------------------
-  Future<void> createPledge({
-    required Map<String, dynamic> pledgeData,
-    required String friendEmail
+  Future<List<Map<String, dynamic>>> getAllPledgesForGift({
+    required String friendEmail,
+    required String giftName,
+    String? eventId,
   }) async {
-    try{
-      final currentUser = await _dbHelper.getUserByEmail(
-          _auth.currentUser?.email ?? ""
+    try {
+      // First get the friend's user document
+      final friendQuery = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: friendEmail)
+          .get();
+
+      if (friendQuery.docs.isEmpty) {
+        print('Friend not found with email $friendEmail');
+        return [];
+      }
+
+      // Build base query to search across all users' pledges
+      var allPledgesQuery = _firestore
+          .collectionGroup('pledges')
+          .where('giftName', isEqualTo: giftName)
+          .where('giftOwnerEmail', isEqualTo: friendEmail);
+
+      // Add event filter if eventId is provided
+      if (eventId != null) {
+        allPledgesQuery = allPledgesQuery.where('eventId', isEqualTo: eventId);
+      }
+
+      final querySnapshot = await allPledgesQuery.get();
+
+      return querySnapshot.docs
+          .map((doc) => {
+        'id': doc.id,
+        ...doc.data() as Map<String, dynamic>,
+      })
+          .toList();
+    } catch (e) {
+      print('Error getting all pledges for gift: $e');
+      return [];
+    }
+  }
+
+
+  Future<DocumentReference> createPledge({
+    required Map<String, dynamic> pledgeData,
+    required String friendEmail,
+    required String currentUserEmail,
+  }) async {
+    try {
+      // Check for existing pledges first
+      final existingPledges = await getAllPledgesForGift(
+        friendEmail: friendEmail,
+        giftName: pledgeData['giftName'],
+        eventId: pledgeData['eventId'],
       );
 
-      if(currentUser == null){
-        throw Exception('Current user not found in local database');
+      if (existingPledges.isNotEmpty) {
+        throw Exception('This gift has already been pledged');
       }
 
-      final friend = await _dbHelper.getUserByEmail(friendEmail);
+      // Get the current user's document
+      final currentUserQuery = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: currentUserEmail)
+          .get();
 
-      if(friend == null){
-        throw Exception("No friend found with email $friendEmail");
+      if (currentUserQuery.docs.isEmpty) {
+        throw Exception('Current user not found with email $currentUserEmail');
       }
-      final pledgeId = Uuid().v4();
-      await _firestore.collection('users')
-          .doc(currentUser['email'])
-          .collection('user_friends')
-          .doc(friendEmail)
-          .collection('user_pledged_gifts')
-          .doc(pledgeId)
-          .set(pledgeData);
-      print('Created pledge with ID: $pledgeId in Firestore for friend: ${friendEmail}');
 
+      final currentUserId = currentUserQuery.docs.first.id;
 
-    }catch(e){
+      // Add additional metadata to pledgeData
+      final enrichedPledgeData = {
+        ...pledgeData,
+        'giftOwnerEmail': friendEmail,
+        'pledgedByEmail': currentUserEmail,
+        'pledgeDate': FieldValue.serverTimestamp(),
+      };
+
+      // Create the pledge under the current user's pledges collection
+      final pledgeRef = await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('pledges')
+          .add(enrichedPledgeData);
+
+      return pledgeRef;
+    } catch (e) {
       print('Error creating pledge: $e');
-      throw Exception('Error creating pledge: $e');
+      rethrow;
     }
-
   }
 
   Future<void> updatePledge({
     required Map<String, dynamic> pledgeData,
-    required String friendEmail
+    required String friendEmail,
+    required String pledgeId
   }) async {
     try{
-      final currentUser = await _dbHelper.getUserByEmail(
-          _auth.currentUser?.email ?? ""
-      );
+      // Get user from firestore using friend email.
+      final friendDoc =  await _firestore.collection('users').where('email', isEqualTo: friendEmail).get();
 
-      if(currentUser == null){
-        throw Exception('Current user not found in local database');
-      }
-
-      final friend = await _dbHelper.getUserByEmail(friendEmail);
-      if(friend == null){
+      if (friendDoc.docs.isEmpty) {
         throw Exception("No friend found with email $friendEmail");
       }
+      final friendId = friendDoc.docs.first.id;
+
       await _firestore.collection('users')
-          .doc(currentUser['email'])
-          .collection('user_friends')
-          .doc(friendEmail)
-          .collection('user_pledged_gifts')
-          .doc(pledgeData['id'])
+          .doc(friendId)
+          .collection('pledges')
+          .doc(pledgeId)
           .update(pledgeData);
-      print('Updated pledge with ID: ${pledgeData['id']} in Firestore for friend: ${friendEmail}');
+      print('Updated pledge with ID: ${pledgeId} in Firestore for friend: ${friendEmail}');
     }catch(e){
       print('Error updating pledge: $e');
       throw Exception('Error updating pledge: $e');
@@ -445,165 +570,146 @@ class FirestoreService {
 
   Future<void> removePledge({
     required String pledgeId,
-    required String friendEmail
+    required String currentUserEmail, // Update parameter
   }) async {
-    try{
-      final currentUser = await _dbHelper.getUserByEmail(
-          _auth.currentUser?.email ?? ""
-      );
+    try {
+      // Get current user's document
+      final currentUserDoc = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: currentUserEmail)
+          .get();
 
-      if(currentUser == null){
-        throw Exception('Current user not found in local database');
+      if (currentUserDoc.docs.isEmpty) {
+        throw Exception('Current user not found with email $currentUserEmail');
       }
 
-      final friend = await _dbHelper.getUserByEmail(friendEmail);
-      if(friend == null){
-        throw Exception("No friend found with email $friendEmail");
-      }
+      final currentUserId = currentUserDoc.docs.first.id;
 
-      await _firestore.collection('users')
-          .doc(currentUser['email'])
-          .collection('user_friends')
-          .doc(friendEmail)
-          .collection('user_pledged_gifts')
-          .doc(pledgeId).delete();
-      print('Removed pledge with ID: $pledgeId in Firestore for friend: ${friendEmail}');
-
-    }catch(e){
+      // Delete the pledge from the current user's pledges collection
+      await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('pledges')
+          .doc(pledgeId)
+          .delete();
+    } catch (e) {
       print('Error removing pledge: $e');
-      throw Exception('Error removing pledge: $e');
+      rethrow;
     }
   }
 
 
-
-
-
 // ------------------ Friend Methods ------------------
   // ------------------ Friend Gift Methods ------------------
-  // Future<List<Map<String, dynamic>>> getFriendGifts(String friendEmail) async {
-  //   try {
-  //     final friendUser = await _dbHelper.getUserByEmail(friendEmail);
-  //     if (friendUser == null) {
-  //       print("No friend found with email $friendEmail");
-  //       return [];
-  //     }
-  //     final db = await _dbHelper.database;
-  //     final friendEvents = await db.query(
-  //         DatabaseHelper.tableEvents,
-  //         where: 'user_id = ?',
-  //         whereArgs: [friendUser['_id']]
-  //     );
-  //
-  //
-  //     if (friendEvents.isEmpty) {
-  //       print('No events found for user ID: ${friendUser['_id']}');
-  //       return [];
-  //     }
-  //
-  //     List<String> eventIds = friendEvents.map((event) => event['_id'].toString()).toList();
-  //
-  //     final giftsQuery = await _firestore.collection('gifts')
-  //         .where('event_id', whereIn: eventIds)
-  //         .get();
-  //
-  //     final gifts = giftsQuery.docs.map((doc) {
-  //       final data = doc.data();
-  //       return {
-  //         '_id': int.tryParse(doc.id) ?? -1,  // Firestore document ID
-  //         ...data,
-  //         'pledged': data['pledged'] is int
-  //             ? data['pledged']
-  //             : int.tryParse(data['pledged']?.toString() ?? '0') ?? 0,
-  //         // Similar conversions for other fields if needed
-  //       };
-  //     }).toList();
-  //     return gifts;
-  //   } catch (e) {
-  //     print('Error fetching gifts for friend: $e');
-  //     return [];
-  //   }
-  // }
 
-  Future<List<Map<String, dynamic>>> getFriendGifts(String friendEmail) async {
+  Future<List<Map<String, dynamic>>> getFriendGifts(String friendEmail, String eventFirestoreId) async {
     try {
-      final friendUser = await _dbHelper.getUserByEmail(friendEmail);
-      if (friendUser == null) {
-        print("No friend found with email $friendEmail");
-        return [];
-      }
-      final db = await _dbHelper.database;
-      final friendEvents = await db.query(
-          DatabaseHelper.tableEvents,
-          where: 'user_id = ?',
-          whereArgs: [friendUser['_id']]
-      );
-
-
-      if (friendEvents.isEmpty) {
-        print('No events found for user ID: ${friendUser['_id']}');
-        return [];
-      }
-
-      List<String> eventIds = friendEvents.map((event) => event['_id'].toString()).toList();
-
-      final giftsQuery = await _firestore.collection('gifts')
-          .where('event_id', whereIn: eventIds)
+      // Get friend's user document to get their Firebase Auth UID
+      final friendQuery = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: friendEmail)
           .get();
 
-      final gifts = await Future.wait(giftsQuery.docs.map((doc) async {
+      if (friendQuery.docs.isEmpty) {
+        print('No user found with email $friendEmail in Firestore');
+        return [];
+      }
+
+      final friendUid = friendQuery.docs.first.get('uid');
+
+      print('Querying gifts for event: $eventFirestoreId and user: $friendUid');
+
+      // Query gifts using the Firestore event ID
+      final giftsSnapshot = await _firestore
+          .collection('gifts')
+          .where('event_id', isEqualTo: eventFirestoreId)
+          .where('user_id', isEqualTo: friendUid)
+          .get();
+
+      print('Found ${giftsSnapshot.docs.length} gifts');
+
+      return giftsSnapshot.docs.map((doc) {
         final data = doc.data();
-
-        final localGift = await db.query(
-            DatabaseHelper.tableGifts,
-            where: 'firestoreId = ?',
-            whereArgs: [doc.id]
-        );
-
-        final localGiftId = localGift.isNotEmpty ? localGift.first['_id'] : null;
-
         return {
-          '_id': doc.id,  // Firestore document ID
-          ...data,
-          'localId': localGiftId,
-          'pledged': data['pledged'] is int
-              ? data['pledged']
-              : int.tryParse(data['pledged']?.toString() ?? '0') ?? 0,
-          // Similar conversions for other fields if needed
+          'id': doc.id,
+          'name': data['name'] ?? '',
+          'description': data['description'] ?? '',
+          'category': data['category'] ?? '',
+          'price': data['price'] ?? 0.0,
+          'status': data['status'] ?? 'active',
+          'pledged': data['pledged'] ?? 0,
+          'event_id': data['event_id'] ?? '',
         };
-      }).toList());
-      return gifts;
+      }).toList();
+
     } catch (e) {
-      print('Error fetching gifts for friend: $e');
+      print('Error fetching gifts for friend $friendEmail: $e');
       return [];
     }
   }
 
 
   Future<void> addFriend(String friendEmail) async {
-    try{
-      await _dbHelper.addFriend(friendEmail);
-      final currentUserId = await _dbHelper.getCurrentUserId();
-      if(currentUserId == null){
+    try {
+      // First, find the friend's Firestore document
+      final friendSnapshot = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: friendEmail)
+          .get();
+
+      if (friendSnapshot.docs.isEmpty) {
+        throw Exception('Friend with email $friendEmail not found');
+      }
+
+      // Get the friend's Firestore document ID
+      final friendId = friendSnapshot.docs.first.id;
+      final currentUserEmail = _auth.currentUser?.email;
+
+      if (currentUserEmail == null) {
         throw Exception('No user is currently logged in.');
       }
-      final currentUser = await _dbHelper.getUserByEmail(
-          _auth.currentUser?.email ?? ""
-      );
-      if(currentUser != null) {
-        await _firestore.collection('users')
-            .doc(currentUser['email'])
-            .collection('user_friends')
-            .doc(friendEmail)
-            .set({});
 
-        print('Added friend ${friendEmail} to Firestore');
+      // Get current user's document
+      final currentUserSnapshot = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: currentUserEmail)
+          .get();
+
+      if (currentUserSnapshot.docs.isEmpty) {
+        throw Exception('Current user not found in Firestore');
       }
 
-    } catch(e){
-      print('Error adding friend ${friendEmail} to Firestore: $e');
-    }
+      final currentUserId = currentUserSnapshot.docs.first.id;
 
+      // Check if the friendship already exists
+      final existingFriendship = await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('user_friends')
+          .where('friendId', isEqualTo: friendId)
+          .get();
+
+      if (existingFriendship.docs.isNotEmpty) {
+        throw Exception('$friendEmail is already in your friends list');
+      }
+
+      // Add friend to Firestore
+      await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('user_friends')
+          .add({
+        'email': friendEmail,
+        'friendId': friendId,
+        'added_at': FieldValue.serverTimestamp()
+      });
+
+      print('Added friend $friendEmail to Firestore');
+
+    } catch (e) {
+      print('Error adding friend $friendEmail to Firestore: $e');
+      rethrow;
+    }
   }
 
   Future<void> removeFriend(int friendId) async {
@@ -634,4 +740,379 @@ class FirestoreService {
       print('Error removing friend ${friendId} from Firestore: $e');
     }
   }
+
+
+  Future<List<Map<String, dynamic>>> getFriendsList() async {
+    try {
+      final currentUserEmail = _auth.currentUser?.email;
+      if (currentUserEmail == null) {
+        throw Exception('No user is currently logged in.');
+      }
+
+      // Find the current user's Firestore document
+      final currentUserSnapshot = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: currentUserEmail)
+          .get();
+
+      if (currentUserSnapshot.docs.isEmpty) {
+        throw Exception('Current user not found in Firestore');
+      }
+
+      final currentUserId = currentUserSnapshot.docs.first.id;
+
+      // Fetch friends of the current user
+      QuerySnapshot<Map<String, dynamic>> friendsSnapshot = await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('user_friends')
+          .get();
+
+      // List of friend data
+      List<Map<String, dynamic>> friends = [];
+
+      for (var doc in friendsSnapshot.docs) {
+        // Get friend's ID from the friends collection
+        final friendId = doc.data()['friendId'];
+        final friendEmail = doc.data()['email'];
+
+        // Fetch full friend details from users collection
+        final friendDoc = await _firestore
+            .collection('users')
+            .doc(friendId)
+            .get();
+
+        if (friendDoc.exists) {
+          final friendData = friendDoc.data()!;
+          friendData['email'] = friendEmail;
+          friendData['friendId'] = friendId;
+          friends.add(friendData);
+        }
+      }
+
+      return friends;
+    } catch(e) {
+      print('Error getting friends list: $e');
+      throw Exception('Error getting friends list: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getPledgedGifts() async {
+    try {
+      final currentUserEmail = _auth.currentUser?.email;
+      if(currentUserEmail == null) {
+        throw Exception('No user is currently logged in.');
+      }
+
+      final currentUser = await _dbHelper.getUserByEmail(currentUserEmail);
+      if (currentUser == null) {
+        throw Exception('Current user not found in local database');
+      }
+      final db = await _dbHelper.database;
+
+
+      QuerySnapshot<Map<String, dynamic>> pledgedGiftsSnapshot = await _firestore
+          .collection('users')
+          .doc(currentUserEmail)
+          .collection('user_friends')
+          .get();
+      List<Map<String, dynamic>> pledgedGifts = [];
+      for(var friendDoc in pledgedGiftsSnapshot.docs){
+        QuerySnapshot<Map<String, dynamic>> pledgedGiftsForFriend = await _firestore
+            .collection('users')
+            .doc(currentUserEmail)
+            .collection('user_friends')
+            .doc(friendDoc.id)
+            .collection('user_pledged_gifts')
+            .get();
+
+        for (var doc in pledgedGiftsForFriend.docs) {
+          final data = doc.data();
+          final localGift = await db.query(
+            'gifts',
+            where: 'name = ?',
+            whereArgs: [data['giftName']],
+          );
+          final giftId = localGift.isNotEmpty ? localGift.first['id'] as int : null;
+
+
+          if (data.containsKey('giftName') && giftId != null) {
+            pledgedGifts.add({
+              'id': doc.id,
+              'giftName': data['giftName'] as String,
+              'pledgeDate': data['pledgeDate'] as String,
+              'friendName': friendDoc.id,
+              'giftId': giftId,
+            });
+
+          }
+        }
+      }
+      return pledgedGifts;
+
+    } catch (e) {
+      print('Error fetching pledged gifts: $e');
+      throw Exception('Error fetching pledged gifts: $e');
+    }
+  }
+
+  Future<void> updatePledgeStatus({
+    required String pledgeId,
+    required String newStatus,
+    required String friendEmail
+  }) async {
+    try {
+      // Get user from firestore using friend email.
+      final friendDoc =  await _firestore.collection('users').where('email', isEqualTo: friendEmail).get();
+      if (friendDoc.docs.isEmpty) {
+        throw Exception("No friend found with email $friendEmail");
+      }
+      final friendId = friendDoc.docs.first.id;
+
+      await _firestore
+          .collection('users')
+          .doc(friendId)
+          .collection('pledges')
+          .doc(pledgeId)
+          .update({'status': newStatus});
+    } catch (e) {
+      print('Error updating pledge status: $e');
+      rethrow;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getPledge({
+    required String friendEmail,
+    required String giftName,
+    required String currentUserEmail, // Add current user's email
+    String? eventId,
+  }) async {
+    try {
+      // Get current user's document (the one who made the pledge)
+      final currentUserDoc = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: currentUserEmail)
+          .get();
+
+      if (currentUserDoc.docs.isEmpty) {
+        print("Current user not found with email $currentUserEmail");
+        return [];
+      }
+
+      final currentUserId = currentUserDoc.docs.first.id;
+
+      // Query the pledges under the current user's document
+      var query = _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('pledges')
+          .where('giftName', isEqualTo: giftName)
+          .where('giftOwnerEmail', isEqualTo: friendEmail);
+
+      if (eventId != null) {
+        query = query.where('eventId', isEqualTo: eventId);
+      }
+
+      final querySnapshot = await query.get();
+
+      final pledges = querySnapshot.docs
+          .map((doc) => {
+        'id': doc.id,
+        ...doc.data() as Map<String, dynamic>,
+      })
+          .toList();
+
+      return pledges;
+    } catch (e) {
+      print('Error fetching pledge: $e');
+      return [];
+    }
+  }
+  Future<List<Map<String, dynamic>>> getFriendEvents(String friendEmail) async {
+    try {
+      print('Fetching events for friend: $friendEmail');
+
+      // Get friend's user document to get their Firebase Auth UID
+      final userQuery = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: friendEmail)
+          .get();
+
+      if (userQuery.docs.isEmpty) {
+        print('No user document found for email: $friendEmail');
+        return [];
+      }
+
+      // Get the Firebase Auth UID from the user document
+      // This assumes you store the Firebase Auth UID in the user document
+      final userData = userQuery.docs.first.data();
+      final authUid = userData['uid']; // Make sure you store this when creating user documents
+
+      if (authUid == null) {
+        print('No Firebase Auth UID found for user');
+        return [];
+      }
+
+      print('Found friend Auth UID: $authUid');
+
+      // Query events using the Firebase Auth UID
+      final eventsQuery = await _firestore
+          .collection('events')
+          .where('user_id', isEqualTo: authUid)
+          .get();
+
+      print('Found ${eventsQuery.docs.length} events for Auth UID: $authUid');
+
+      return eventsQuery.docs.map((doc) {
+        final data = doc.data();
+        return {
+          'id': doc.id,
+          'name': data['name'] ?? 'Unnamed Event',
+          'category': data['category'] ?? '',
+          'date': data['date'] ?? '',
+          'description': data['description'] ?? '',
+          'location': data['location'] ?? '',
+          'status': data['status'] ?? '',
+          'user_id': data['user_id'] ?? '',
+        };
+      }).toList();
+
+    } catch (e) {
+      print('Error in getFriendEvents: $e');
+      return [];
+    }
+  }
+  // Future<void> updateGiftPledgeStatus(String giftId, int pledgeStatus) async {
+  //   try {
+  //     final giftsCollection = FirebaseFirestore.instance.collection('gifts');
+  //     await giftsCollection.doc(giftId).update({'pledged': pledgeStatus});
+  //   } catch (e) {
+  //     print('Error updating pledge status: $e');
+  //     throw e;
+  //   }
+  // }
+  Future<void> _syncPledgeStatusToLocal(String firestoreGiftId, int pledgeStatus) async {
+    try {
+      final db = await _dbHelper.database;
+
+      // Query the local gift using the Firestore ID
+      final localGifts = await db.query(
+        DatabaseHelper.tableGifts,
+        columns: ['_id'],
+        where: 'firestoreId = ?',
+        whereArgs: [firestoreGiftId],
+      );
+
+      if (localGifts.isEmpty) {
+        print('No local gift found with Firestore ID: $firestoreGiftId');
+        return;
+      }
+
+      // Update the local gift's pledge status
+      final localGiftId = localGifts.first['_id'] as int;
+      await db.update(
+        DatabaseHelper.tableGifts,
+        {'pledged': pledgeStatus},
+        where: '_id = ?',
+        whereArgs: [localGiftId],
+      );
+
+      print('Successfully synced pledge status to local database for gift ID: $localGiftId');
+    } catch (e) {
+      print('Error syncing pledge status to local database: $e');
+      throw Exception('Failed to sync pledge status to local database: $e');
+    }
+  }
+  // Future<void> updateGiftPledgeStatus(String giftId, int pledgeStatus) async {
+  //   try {
+  //     // First get the gift document from Firestore to find the owner
+  //     final giftDoc = await _firestore.collection('gifts').doc(giftId).get();
+  //
+  //     if (!giftDoc.exists) {
+  //       throw Exception('Gift not found in Firestore');
+  //     }
+  //
+  //     final giftData = giftDoc.data();
+  //     final ownerId = giftData?['user_id']; // This is the Firebase Auth UID of the gift owner
+  //
+  //     if (ownerId == null) {
+  //       throw Exception('Gift owner not found');
+  //     }
+  //
+  //     // Get the owner's email from users collection
+  //     final ownerDoc = await _firestore
+  //         .collection('users')
+  //         .where('uid', isEqualTo: ownerId)
+  //         .get();
+  //
+  //     if (ownerDoc.docs.isEmpty) {
+  //       throw Exception('Gift owner user document not found');
+  //     }
+  //
+  //     final ownerEmail = ownerDoc.docs.first.data()['email'];
+  //
+  //     // Update Firestore
+  //     await _firestore
+  //         .collection('gifts')
+  //         .doc(giftId)
+  //         .update({'pledged': pledgeStatus});
+  //
+  //     // Check if the current user is the gift owner
+  //     if (_auth.currentUser?.email == ownerEmail) {
+  //       // If yes, update local database
+  //       await _syncPledgeStatusToLocal(giftId, pledgeStatus);
+  //       print('Updated local database for gift owner');
+  //     } else {
+  //       print('Skipping local database update as current user is not the gift owner');
+  //     }
+  //
+  //     print('Successfully updated pledge status in Firestore');
+  //   } catch (e) {
+  //     print('Error updating pledge status: $e');
+  //     throw e;
+  //   }
+  // }
+  Future<void> updateGiftPledgeStatus(String giftId, int pledgeStatus) async {
+    try {
+      // First get the gift document from Firestore to find the owner
+      final giftDoc = await _firestore.collection('gifts').doc(giftId).get();
+
+      if (!giftDoc.exists) {
+        throw Exception('Gift not found in Firestore');
+      }
+
+      final giftData = giftDoc.data();
+      final ownerId = giftData?['user_id']; // This is the Firebase Auth UID of the gift owner
+
+      if (ownerId == null) {
+        throw Exception('Gift owner not found');
+      }
+
+      // Get the owner's email from users collection
+      final ownerDoc = await _firestore
+          .collection('users')
+          .where('uid', isEqualTo: ownerId)
+          .get();
+
+      if (ownerDoc.docs.isEmpty) {
+        throw Exception('Gift owner user document not found');
+      }
+
+      // Update Firestore - this will be synced to owner's local DB when they next open the app
+      await _firestore
+          .collection('gifts')
+          .doc(giftId)
+          .update({'pledged': pledgeStatus});
+
+      print('Successfully updated pledge status in Firestore for gift: $giftId');
+      print('Changes will sync to gift owner\'s device when they next open the app');
+
+    } catch (e) {
+      print('Error updating pledge status: $e');
+      throw e;
+    }
+  }
+
+
+
 }
